@@ -1,0 +1,37 @@
+# Local SSRF lab target (pairs with tests/fixtures/vulnerable_ssrf.py).
+#   Start it:  python tests/fixtures/vulnerable_ssrf.py 8300
+program:
+  name: "local-ssrf"
+  platform: "local-practice"
+  handle: "local-ssrf"
+
+scope:
+  in_scope:
+    - { type: cidr,   value: "127.0.0.0/8" }
+    - { type: domain, value: "localhost" }
+  out_of_scope: []
+
+rules:
+  automated_scanning_allowed: true
+  # Set this false to demonstrate refusing SSRF/metadata testing where a program
+  # forbids it (the module surfaces and respects this).
+  ssrf_testing_allowed: true
+  notes: "Local intentionally-vulnerable SSRF app for validation."
+
+rate_limit:
+  requests_per_second: 25.0
+  per_host_rps: 25.0
+  max_concurrency: 6
+
+http:
+  user_agent: "BugBountyPlatform SSRF Practice (contact: you@example.com)"
+  timeout_seconds: 12
+  verify_tls: false
+
+callback:
+  interactsh_domain: ""
+  interactsh_server: "https://oast.fun"
+
+# SSRF-module options: which internal hosts to probe once SSRF is confirmed.
+ssrf:
+  internal_targets: ["127.0.0.1"]

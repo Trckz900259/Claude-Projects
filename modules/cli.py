@@ -30,6 +30,7 @@ def register(app: typer.Typer) -> None:
         no_blind: bool = typer.Option(False, "--no-blind", help="Don't inject blind/OOB payloads."),
         record_video: bool = typer.Option(False, "--video", help="Record short PoC videos (slower)."),
         sweep: bool = typer.Option(False, "--sweep", help="(access-control) authorise a controlled sequential id sweep."),
+        interactsh: bool = typer.Option(False, "--interactsh", help="(ssrf) use interactsh for OOB instead of the local collaborator."),
         db: Path = typer.Option(Path("data/findings.db"), help="SQLite datastore path."),
     ) -> None:
         """Run a vulnerability module across the inventory, fault-tolerantly."""
@@ -51,6 +52,8 @@ def register(app: typer.Typer) -> None:
             kwargs = dict(use_dalfox=not no_dalfox, use_blind=not no_blind, record_video=record_video)
         elif module == "accesscontrol":
             kwargs = dict(sweep=sweep)
+        elif module == "ssrf":
+            kwargs = dict(use_interactsh=interactsh)
 
         try:
             mod = module_cls(ctx, **kwargs)

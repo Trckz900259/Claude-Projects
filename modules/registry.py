@@ -8,11 +8,13 @@ from __future__ import annotations
 
 from modules.accesscontrol.module import AccessControlModule
 from modules.base import Module
+from modules.ssrf.module import SsrfModule
 from modules.xss.module import XssModule
 
 REGISTRY: dict[str, type[Module]] = {
     "xss": XssModule,
     "accesscontrol": AccessControlModule,
+    "ssrf": SsrfModule,
 }
 
 

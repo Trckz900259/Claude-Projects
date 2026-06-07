@@ -36,6 +36,7 @@ packages = [
     "modules",
     "modules.xss",
     "modules.accesscontrol",
+    "modules.ssrf",
     "verify",
     "report",
     "dashboard",
