@@ -1,0 +1,52 @@
+# ============================================================================
+#  OWASP JUICE SHOP — safe local practice target
+# ----------------------------------------------------------------------------
+#  OWASP Juice Shop is an intentionally-vulnerable web app the OWASP project
+#  publishes specifically so people can practise finding bugs LEGALLY on their
+#  own machine. Run it locally first (see README) and validate the whole
+#  pipeline here before you ever point this platform at a real program.
+#
+#  Start it with:
+#     docker run --rm -p 3000:3000 bkimminich/juice-shop
+#  then it is reachable at http://localhost:3000
+# ============================================================================
+
+program:
+  name: "juice-shop-local"
+  platform: "local-practice"
+  handle: "juice-shop"
+
+scope:
+  in_scope:
+    # Only your own local instance. Nothing else is touchable.
+    - { type: domain, value: "localhost" }
+    - { type: cidr,   value: "127.0.0.0/8" }
+  out_of_scope: []
+
+rules:
+  # Practising on YOUR OWN local instance — automation is fine here.
+  automated_scanning_allowed: true
+  eyeball_only: false
+  notes: "Local OWASP Juice Shop instance for safe end-to-end validation."
+
+rate_limit:
+  # It's local, so we can be a bit quicker — still bounded.
+  requests_per_second: 10.0
+  per_host_rps: 10.0
+  max_concurrency: 8
+
+http:
+  user_agent: "BugBountyPlatform Local Practice (contact: you@example.com)"
+  timeout_seconds: 15
+  follow_redirects: true
+  verify_tls: false               # local http, no TLS
+  max_retries: 1
+
+callback:
+  interactsh_domain: ""
+  interactsh_server: "https://oast.fun"
+
+notifications:
+  discord_webhook: ""
+  telegram_bot_token: ""
+  telegram_chat_id: ""

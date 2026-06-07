@@ -1,0 +1,39 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# ---- Project data (never commit captured PoCs, DBs, logs, secrets) ----
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/*.sqlite
+data/*.sqlite3
+data/pocs/
+data/logs/
+data/runs/
+data/tmp/
+
+# Local secrets / overrides
+config/*.local.yml
+config/secrets.yml
+.env
+
+# ---- OS / editor noise ----
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# ---- External tool caches ----
+.interactsh/

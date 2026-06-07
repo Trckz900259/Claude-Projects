@@ -1,0 +1,69 @@
+# ============================================================================
+#  EXAMPLE PROGRAM PROFILE  (copy this to make a real one)
+# ----------------------------------------------------------------------------
+#  This single file is the ONLY place a target is ever defined. The platform is
+#  default-deny: if a host is not matched by an `in_scope` entry below, every
+#  request to it is hard-refused at the HTTP layer.
+#
+#  Copy this file to e.g. config/acme.yml and edit it for one real program.
+#  Never commit a file containing live secrets (use config/*.local.yml — those
+#  are git-ignored).
+# ============================================================================
+
+program:
+  name: "example"                 # short id, used in the database & reports
+  platform: "hackerone"           # where the program lives
+  handle: "example"               # the program handle on that platform
+
+# --- SCOPE: the allow-list. This is the safety boundary. -------------------
+scope:
+  in_scope:
+    # type: domain   -> the apex AND all subdomains (example.com, api.example.com)
+    - { type: domain,   value: "example.com" }
+    # type: wildcard -> subdomains only (*.example.com, NOT example.com itself)
+    - { type: wildcard, value: "*.api.example.com" }
+    # type: url      -> only this URL prefix (scheme + host + path)
+    - { type: url,      value: "https://app.example.com/" }
+    # type: cidr     -> IP-literal hosts inside this range
+    # - { type: cidr,   value: "192.0.2.0/24" }
+
+  out_of_scope:
+    # Deny-list ALWAYS wins over the allow-list. List anything the program
+    # excludes here (staff portals, third-party hosts, etc.).
+    - { type: domain, value: "blog.example.com" }
+    - { type: url,    value: "https://example.com/admin" }
+
+# --- RULES: program permissions the platform must respect ------------------
+rules:
+  # If false, every module REFUSES to run automated scans against this program.
+  # Default is false (safe). Set true ONLY if the program permits automation.
+  automated_scanning_allowed: false
+  eyeball_only: false
+  notes: "Read the program policy and reflect its limits here."
+
+# --- RATE LIMIT: conservative, polite defaults -----------------------------
+rate_limit:
+  requests_per_second: 2.0        # global cap across all hosts
+  per_host_rps: 1.0               # cap per individual host
+  max_concurrency: 5              # max simultaneous in-flight requests
+
+# --- HTTP: identify yourself on every request (REQUIRED) -------------------
+http:
+  # An identifiable researcher User-Agent is mandatory. Put real contact info.
+  user_agent: "YourName BugBounty Research (contact: you@example.com)"
+  timeout_seconds: 15
+  follow_redirects: true
+  verify_tls: true
+  max_retries: 2
+
+# --- CALLBACK: out-of-band (blind XSS) server ------------------------------
+callback:
+  # Fill in with your interactsh client's domain once it is running.
+  interactsh_domain: ""           # e.g. "abcd1234.oast.fun"
+  interactsh_server: "https://oast.fun"
+
+# --- NOTIFICATIONS: optional alerts when a blind callback fires -------------
+notifications:
+  discord_webhook: ""
+  telegram_bot_token: ""
+  telegram_chat_id: ""

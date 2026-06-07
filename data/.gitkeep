@@ -1,0 +1,3 @@
+# This directory holds the SQLite database, captured PoCs, and logs at runtime.
+# Its contents are git-ignored (see .gitignore) so we never commit findings,
+# screenshots, or logs to the repository.

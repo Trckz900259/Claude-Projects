@@ -1,0 +1,34 @@
+# ============================================================================
+#  Bug Bounty Platform — Python dependencies
+# ----------------------------------------------------------------------------
+#  These are the *Python* libraries. The external CLI tools the platform wraps
+#  (subfinder, httpx, gau, katana, dalfox, gf, kxss, interactsh-client) are
+#  installed separately by scripts/install_tools.sh — they are NOT pip packages.
+# ============================================================================
+
+# --- Core framework ---
+PyYAML>=6.0.1            # Parse the per-program YAML config/rules profiles
+requests>=2.31.0         # The HTTP client our engine wraps (scope-guarded)
+typer>=0.12.0            # Builds the single, friendly command-line interface
+rich>=13.7.0             # Pretty, colourful terminal output (tables, progress)
+
+# --- Recon / parsing helpers ---
+beautifulsoup4>=4.12.0   # Parse HTML to figure out *where* our input reflects
+lxml>=5.1.0              # Fast HTML/XML parser backend for BeautifulSoup
+arjun>=2.2.1             # Parameter discovery (this one IS a pip package)
+dnspython>=2.6.0         # DNS lookups (resolve hosts, sanity-check scope)
+
+# --- Verification ---
+playwright>=1.44.0       # Headless browser: proves a payload actually executes
+
+# --- Reporting ---
+Jinja2>=3.1.3            # Templating engine for Markdown/HTML report generation
+Markdown>=3.6            # Convert our Markdown reports to HTML (then -> PDF)
+
+# --- Dashboard ---
+streamlit>=1.35.0        # The web dashboard
+pandas>=2.2.0            # Tabular data for the dashboard findings table
+plotly>=5.20.0           # Severity / timeline charts in the dashboard
+
+# --- Dev / tests ---
+pytest>=8.1.0            # Test runner (we prove scope enforcement here)
