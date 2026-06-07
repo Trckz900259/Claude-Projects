@@ -89,6 +89,13 @@ class HttpEngine:
         self.config = http_config
         self.log = logger or logging.getLogger(__name__)
         self._session = requests.Session()
+        # COOKIE-STATELESS: reject all cookies so a Set-Cookie from one request
+        # can never auto-attach to a later one. This is essential for multi-
+        # identity testing — each request must carry ONLY its identity's explicit
+        # auth, with zero implicit state leaking between identities.
+        from http.cookiejar import DefaultCookiePolicy
+
+        self._session.cookies.set_policy(DefaultCookiePolicy(allowed_domains=[]))
         # A simple counter so logs/reports can reference request numbers.
         self._counter = 0
 

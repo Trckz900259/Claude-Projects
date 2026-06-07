@@ -167,6 +167,75 @@ CREATE INDEX IF NOT EXISTS idx_findings_status ON findings(status);
 CREATE INDEX IF NOT EXISTS idx_urls_program ON urls(program_id);
 CREATE INDEX IF NOT EXISTS idx_params_program ON parameters(program_id);
 CREATE INDEX IF NOT EXISTS idx_queue_run_status ON queue_items(run_id, status);
+
+-- ===================================================================
+--  Access-control / IDOR module (Prompt 2) shared tables
+-- ===================================================================
+
+-- Identity profiles (metadata only — raw secrets live in a gitignored
+-- identities file/in memory, never committed). Used by the session manager
+-- and shown on the dashboard's identity panel.
+CREATE TABLE IF NOT EXISTS identities (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    program_id   INTEGER NOT NULL REFERENCES programs(id),
+    name         TEXT NOT NULL,           -- e.g. 'userA'
+    role         TEXT,                    -- 'high_priv' | 'low_priv' | 'anonymous'
+    auth_type    TEXT,                    -- 'bearer' | 'cookie' | 'header' | 'none'
+    auth_summary TEXT,                    -- REDACTED summary, e.g. 'bearer eyJ…(82)'
+    description  TEXT,
+    created_at   TEXT NOT NULL,
+    UNIQUE(program_id, name)
+);
+
+-- Captured request/response pairs (from mitmproxy or manual import). The raw
+-- material the replay+compare engine consumes.
+CREATE TABLE IF NOT EXISTS captured_traffic (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    program_id   INTEGER NOT NULL REFERENCES programs(id),
+    method       TEXT NOT NULL,
+    url          TEXT NOT NULL,
+    host         TEXT,
+    req_headers  TEXT,                    -- JSON
+    req_body     TEXT,
+    status_code  INTEGER,
+    resp_headers TEXT,                    -- JSON
+    resp_body    TEXT,
+    captured_as  TEXT,                    -- which identity captured it (if known)
+    source       TEXT,                    -- 'mitmproxy' | 'manual' | 'spec'
+    created_at   TEXT NOT NULL
+);
+
+-- Endpoint catalogue from the three feeds (recon, OpenAPI/Postman, traffic).
+CREATE TABLE IF NOT EXISTS endpoints (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    program_id    INTEGER NOT NULL REFERENCES programs(id),
+    method        TEXT NOT NULL,
+    path_template TEXT NOT NULL,          -- e.g. /api/orders/{id}
+    base_url      TEXT,
+    params        TEXT,                   -- JSON: [{name,location,example,...}]
+    source        TEXT,                   -- 'recon'|'openapi'|'postman'|'traffic'
+    meta          TEXT,                   -- JSON: spec metadata, expected responses
+    created_at    TEXT NOT NULL,
+    UNIQUE(program_id, method, path_template)
+);
+
+-- Catalogue of likely object-reference parameters and their enumeration class.
+CREATE TABLE IF NOT EXISTS id_params (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    program_id   INTEGER NOT NULL REFERENCES programs(id),
+    endpoint     TEXT,                    -- url or path it appears on
+    location     TEXT,                    -- path|query|body|header|cookie|hidden
+    name         TEXT NOT NULL,
+    example_value TEXT,
+    id_class     TEXT,                    -- sequential|encoded|uuidv1|uuidv4|unknown
+    strategy     TEXT,                    -- how we'd enumerate it (read-only)
+    notes        TEXT,
+    created_at   TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_traffic_program ON captured_traffic(program_id);
+CREATE INDEX IF NOT EXISTS idx_endpoints_program ON endpoints(program_id);
+CREATE INDEX IF NOT EXISTS idx_idparams_program ON id_params(program_id);
 """
 
 
@@ -480,6 +549,82 @@ class Datastore:
             (run_id,),
         )
         return {r["status"]: int(r["n"]) for r in rows}
+
+    # -- access-control module: identities --------------------------------
+    def upsert_identity(
+        self, program_id: int, name: str, role: str = "",
+        auth_type: str = "", auth_summary: str = "", description: str = "",
+    ) -> int:
+        existing = self.query_one(
+            "SELECT id FROM identities WHERE program_id = ? AND name = ?", (program_id, name)
+        )
+        if existing:
+            self._execute(
+                "UPDATE identities SET role=?, auth_type=?, auth_summary=?, description=? WHERE id=?",
+                (role, auth_type, auth_summary, description, int(existing["id"])),
+            )
+            return int(existing["id"])
+        cur = self._execute(
+            "INSERT INTO identities (program_id, name, role, auth_type, auth_summary, description, created_at) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (program_id, name, role, auth_type, auth_summary, description, _now()),
+        )
+        return int(cur.lastrowid)
+
+    def get_identities(self, program_id: int) -> list[sqlite3.Row]:
+        return self.query("SELECT * FROM identities WHERE program_id = ? ORDER BY id", (program_id,))
+
+    # -- access-control module: captured traffic --------------------------
+    def add_captured(
+        self, program_id: int, method: str, url: str, host: str = "",
+        req_headers: dict | None = None, req_body: str = "",
+        status_code: int | None = None, resp_headers: dict | None = None,
+        resp_body: str = "", captured_as: str = "", source: str = "mitmproxy",
+    ) -> int:
+        cur = self._execute(
+            "INSERT INTO captured_traffic "
+            "(program_id, method, url, host, req_headers, req_body, status_code, "
+            " resp_headers, resp_body, captured_as, source, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (program_id, method, url, host, json.dumps(req_headers or {}), req_body,
+             status_code, json.dumps(resp_headers or {}), resp_body, captured_as, source, _now()),
+        )
+        return int(cur.lastrowid)
+
+    def get_captured(self, program_id: int) -> list[sqlite3.Row]:
+        return self.query(
+            "SELECT * FROM captured_traffic WHERE program_id = ? ORDER BY id", (program_id,)
+        )
+
+    # -- access-control module: endpoints + id params --------------------
+    def add_endpoint(
+        self, program_id: int, method: str, path_template: str, base_url: str = "",
+        params: list | None = None, source: str = "recon", meta: dict | None = None,
+    ) -> None:
+        self._execute(
+            "INSERT OR IGNORE INTO endpoints "
+            "(program_id, method, path_template, base_url, params, source, meta, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (program_id, method, path_template, base_url, json.dumps(params or []),
+             source, json.dumps(meta or {}), _now()),
+        )
+
+    def get_endpoints(self, program_id: int) -> list[sqlite3.Row]:
+        return self.query("SELECT * FROM endpoints WHERE program_id = ? ORDER BY id", (program_id,))
+
+    def add_id_param(
+        self, program_id: int, name: str, location: str, endpoint: str = "",
+        example_value: str = "", id_class: str = "unknown", strategy: str = "", notes: str = "",
+    ) -> None:
+        self._execute(
+            "INSERT INTO id_params "
+            "(program_id, endpoint, location, name, example_value, id_class, strategy, notes, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (program_id, endpoint, location, name, example_value, id_class, strategy, notes, _now()),
+        )
+
+    def get_id_params(self, program_id: int) -> list[sqlite3.Row]:
+        return self.query("SELECT * FROM id_params WHERE program_id = ? ORDER BY id", (program_id,))
 
     def close(self) -> None:
         with self._lock:

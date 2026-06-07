@@ -73,6 +73,19 @@ class PlatformContext:
         if not self.config.rules.automated_scanning_allowed:
             raise ScanningNotPermittedError(self.config.name, action)
 
+    def session_manager(self):
+        """
+        Build the multi-identity SessionManager from this program's identities
+        (shared service for access-control and future modules). Also persists
+        identity metadata for the dashboard.
+        """
+        from core.identity import SessionManager, load_identities
+
+        profiles = load_identities(self.config)
+        sm = SessionManager(self.http, profiles, logger=get_logger("identity"))
+        sm.persist(self.datastore, self.program_id)
+        return sm
+
     def close(self) -> None:
         self.http.close()
         self.datastore.close()

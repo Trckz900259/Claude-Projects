@@ -35,6 +35,7 @@ packages = [
     "recon",
     "modules",
     "modules.xss",
+    "modules.accesscontrol",
     "verify",
     "report",
     "dashboard",

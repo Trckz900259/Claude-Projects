@@ -1,0 +1,46 @@
+# ============================================================================
+#  LOCAL VULNERABLE API — access-control validation target (no Docker needed)
+# ----------------------------------------------------------------------------
+#  Pairs with tests/fixtures/vulnerable_api.py. Identities (with login flows for
+#  YOUR OWN seeded accounts) live in the gitignored local file referenced below.
+#    Start the app:  python tests/fixtures/vulnerable_api.py 8100
+# ============================================================================
+
+program:
+  name: "local-api"
+  platform: "local-practice"
+  handle: "local-api"
+
+scope:
+  in_scope:
+    - { type: cidr,   value: "127.0.0.0/8" }
+    - { type: domain, value: "localhost" }
+  out_of_scope: []
+
+rules:
+  automated_scanning_allowed: true
+  eyeball_only: false
+  notes: "Local intentionally-vulnerable API for access-control validation."
+
+rate_limit:
+  requests_per_second: 20.0
+  per_host_rps: 20.0
+  max_concurrency: 8
+
+http:
+  user_agent: "BugBountyPlatform AccessControl Practice (contact: you@example.com)"
+  timeout_seconds: 15
+  follow_redirects: true
+  verify_tls: false
+  max_retries: 1
+
+callback:
+  interactsh_domain: ""
+  interactsh_server: "https://oast.fun"
+
+notifications:
+  discord_webhook: ""
+
+# Identities (auth material for YOUR OWN accounts) are kept in a separate,
+# git-ignored file so tokens are never committed.
+identities_file: "local-api.identities.local.yml"

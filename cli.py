@@ -153,6 +153,12 @@ def _register_later_stages() -> None:
     except Exception:
         pass
     try:
+        from modules.accesscontrol.cli import register as register_ac
+
+        register_ac(app)
+    except Exception:
+        pass
+    try:
         from report.cli import register as register_report
 
         register_report(app)
