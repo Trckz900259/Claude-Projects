@@ -23,6 +23,7 @@ data/pocs/
 data/logs/
 data/runs/
 data/tmp/
+data/reports/
 
 # Local secrets / overrides
 config/*.local.yml

@@ -37,7 +37,13 @@ from modules.xss.dalfox import run_dalfox
 from modules.xss.dom import DomAnalyzer
 from modules.xss.payloads import new_marker, payloads_for
 from modules.xss.reflection import inject_param, probe_reflection
+from report.cvss import score_for_subtype
 from verify.playwright_verify import Verifier
+
+
+def _severity(subtype: str) -> str:
+    """Single source of truth: severity follows the CVSS v3.1 rating per subtype."""
+    return score_for_subtype(subtype).rating
 
 _SEVERITY_ORDER = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 
@@ -181,7 +187,7 @@ class XssModule(Module):
                     # Capture the server's raw response to the payload URL.
                     payload_res = self.ctx.http.get(test_url)
                     return Finding(
-                        type="xss", subtype="reflected", severity="high",
+                        type="xss", subtype="reflected", severity=_severity("reflected"),
                         status="verified", url=url, parameter=param,
                         payload=payload, context=ctx.context,
                         request=payload_res.request_as_text(),
@@ -220,7 +226,7 @@ class XssModule(Module):
             payload_res = self.ctx.http.get(r.poc_url) if r.poc_url else None
             return Finding(
                 type="xss", subtype="reflected",
-                severity="high" if verified else "medium",
+                severity=_severity("reflected") if verified else "medium",
                 status="verified" if verified else "new",
                 url=url, parameter=param, payload=r.payload, context="dalfox",
                 request=payload_res.request_as_text() if payload_res else "",
@@ -297,7 +303,7 @@ class XssModule(Module):
 
             findings.append(Finding(
                 type="xss", subtype="dom",
-                severity="high" if verified else "medium",
+                severity=_severity("dom"),
                 status="verified" if verified else "new",
                 url=url, parameter=flow.source, payload=test_url, context="dom",
                 title=f"DOM XSS: {flow.source} -> {flow.sink}"

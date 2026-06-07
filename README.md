@@ -127,6 +127,20 @@ bbp scope-check config/juice-shop.yml "https://example.com/"   # -> refused
 bbp doctor
 ```
 
+## Usage (full pipeline)
+
+```bash
+bbp recon   config/myprogram.yml                 # discover surface -> inventory
+bbp scan    config/myprogram.yml --module xss    # hunt XSS (verified in a browser)
+bbp callbacks config/myprogram.yml               # (optional) listen for blind hits
+bbp report  config/myprogram.yml --only-verified # consultancy-grade MD + PDF
+bbp dashboard                                    # explore everything visually
+```
+
+See **USER_MANUAL.md** for a plain-English walkthrough of every stage, a
+glossary, how to read the dashboard, how to reproduce a finding by hand, and
+troubleshooting.
+
 ### Writing a program profile
 
 Copy `config/example-program.yml` and edit it. The key section is `scope`:
@@ -179,9 +193,11 @@ is made for them.
 
 - [x] **Stage 1 — Foundation:** config/rules engine, scope enforcement, rate
       limiter, HTTP engine, SQLite datastore, logging, CLI, tests. ✅
-- [ ] **Stage 2 — Recon:** subfinder → httpx → gau + katana → arjun → inventory.
-- [ ] **Stage 3 — XSS module + verification.**
-- [ ] **Stage 4 — Reporting + explain engine + USER_MANUAL.md.**
+- [x] **Stage 2 — Recon:** subfinder → httpx → gau + katana → arjun → inventory. ✅
+- [x] **Stage 3 — XSS module + verification** (reflected, attribute, DOM, CSP,
+      blind/OOB scaffolding; Playwright proof + screenshots). ✅
+- [x] **Stage 4 — Reporting + explain engine + USER_MANUAL.md** (Markdown + PDF,
+      CVSS v3.1, context-specific remediation, two-audience explanations). ✅
 - [ ] **Stage 5 — Dashboard.**
 
 See `USER_MANUAL.md` (added in Stage 4) for a plain-English walkthrough of every
