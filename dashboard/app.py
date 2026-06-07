@@ -91,9 +91,10 @@ params = df(conn, "SELECT * FROM parameters WHERE program_id = ?", (pid,))
 assets = df(conn, "SELECT * FROM assets WHERE program_id = ?", (pid,))
 callbacks = df(conn, "SELECT * FROM callbacks WHERE program_id = ? ORDER BY received_at DESC", (pid,))
 runs = df(conn, "SELECT * FROM runs WHERE program_id = ? ORDER BY id DESC", (pid,))
+identities = df(conn, "SELECT * FROM identities WHERE program_id = ? ORDER BY id", (pid,))
 
-tab_over, tab_find, tab_recon, tab_cb, tab_charts = st.tabs(
-    ["Overview", "Findings", "Recon & coverage", "Blind callbacks", "Charts"]
+tab_over, tab_find, tab_recon, tab_ident, tab_cb, tab_charts = st.tabs(
+    ["Overview", "Findings", "Recon & coverage", "Identities", "Blind callbacks", "Charts"]
 )
 
 # ---------------------------------------------------------------------------
@@ -182,6 +183,43 @@ with tab_find:
             if row["response"]:
                 with st.expander("HTTP response"):
                     st.code(str(row["response"])[:8000], language="http")
+
+            # Side-by-side proof for access-control (IDOR/BOLA) findings.
+            try:
+                ev = json.loads(row["evidence"] or "{}")
+            except Exception:
+                ev = {}
+            if ev.get("owner_response") and ev.get("attacker_response"):
+                st.markdown("**Side-by-side proof** (same object, two of my own identities)")
+                sb1, sb2 = st.columns(2)
+                with sb1:
+                    st.caption("① Legitimate owner")
+                    st.code(str(ev.get("owner_response"))[:4000], language="http")
+                with sb2:
+                    st.caption("② Attacker identity — same object")
+                    st.code(str(ev.get("attacker_response"))[:4000], language="http")
+
+# ---------------------------------------------------------------------------
+# Identities (access-control)
+# ---------------------------------------------------------------------------
+with tab_ident:
+    st.subheader("Configured identity profiles")
+    st.caption("Access-control testing uses two or more accounts YOU control "
+               "(own-accounts-only). The 'victim' is always one of your own accounts.")
+    if identities.empty:
+        st.info("No identities configured. Add them to your gitignored identities file "
+                "and run `bbp identities <config>`.")
+    else:
+        st.dataframe(
+            identities[["name", "role", "auth_type", "auth_summary", "description"]],
+            use_container_width=True, hide_index=True,
+        )
+        n_auth = int((identities["role"] != "anonymous").sum())
+        if n_auth >= 2:
+            st.success(f"✓ {n_auth} authenticated identities — ready for access-control testing.")
+        else:
+            st.warning(f"⚠ Only {n_auth} authenticated identity(ies); need ≥ 2.")
+
 
 # ---------------------------------------------------------------------------
 # Recon & coverage

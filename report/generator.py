@@ -117,7 +117,7 @@ class ReportGenerator:
         if cvss.vector:
             md.append(f"| CVSS v3.1 | {cvss.score} ({cvss.rating}) — `{cvss.vector}` |")
         md.append(f"| Status | {f['status']} |")
-        md.append(f"| CWE | CWE-79 |")
+        md.append(f"| CWE | {evidence.get('cwe', 'CWE-79')} |")
         md.append(f"| Affected URL | `{f['url']}` |")
         if f["parameter"]:
             md.append(f"| Parameter | `{f['parameter']}` |")
@@ -183,6 +183,20 @@ class ReportGenerator:
             md.append(str(f["response"])[:6000])
             md.append("```")
             md.append("")
+
+        # Side-by-side proof (access-control: same object as owner vs as attacker)
+        if evidence.get("owner_response") and evidence.get("attacker_response"):
+            md.append("## Side-by-side proof")
+            md.append("**(1) Legitimate owner** retrieving their own object:")
+            if evidence.get("owner_request"):
+                md.append("```http\n" + str(evidence["owner_request"])[:2000] + "\n```")
+            md.append("```http\n" + str(evidence["owner_response"])[:2500] + "\n```")
+            md.append("\n**(2) Attacker identity** retrieving the SAME object:")
+            if evidence.get("attacker_request"):
+                md.append("```http\n" + str(evidence["attacker_request"])[:2000] + "\n```")
+            md.append("```http\n" + str(evidence["attacker_response"])[:2500] + "\n```")
+            md.append("\nThe attacker identity receives the owner's private object — "
+                      "both accounts are mine.\n")
 
         # Remediation
         md.append("## Remediation")

@@ -79,6 +79,8 @@ class AccessControlModule(Module):
         self.ctx.require_automated_scanning("access-control scan")
         self.sm.require_min(2)        # OWN-ACCOUNTS-ONLY gate
         self.sm.prime()               # fetch/refresh tokens
+        # Re-persist now that tokens are primed, so the dashboard shows real auth.
+        self.sm.persist(self.ctx.datastore, self.ctx.program_id)
 
     def teardown(self) -> None:
         # Run race tests now, sequentially, with the concurrent pool finished, so
@@ -204,6 +206,18 @@ class AccessControlModule(Module):
                 candidates.append(Candidate(self.name, {
                     "kind": "jwt", "token": tok, "oracle_url": oracle}))
 
+        # --- GraphQL authorization testing (one candidate per base host) ---
+        bases: set[str] = set()
+        for e in endpoints:
+            if e["base_url"]:
+                bases.add(e["base_url"])
+        for row in captured:
+            p = urlparse(row["url"])
+            if p.scheme and p.netloc:
+                bases.add(f"{p.scheme}://{p.netloc}")
+        for b in sorted(bases):
+            candidates.append(Candidate(self.name, {"kind": "graphql", "base_url": b}))
+
         # --- controlled sequential sweep (opt-in only) ---
         if self.sweep:
             candidates.extend(self._sweep_candidates(id_endpoints, auth))
@@ -264,7 +278,25 @@ class AccessControlModule(Module):
             return self._test_race(candidate.data)
         if kind == "bypass":
             return self._test_bypass(candidate.data)
+        if kind == "graphql":
+            return self._test_graphql(candidate.data)
         return []
+
+    # ---- GraphQL authorization ----
+    def _test_graphql(self, d: dict) -> list[Finding]:
+        from modules.accesscontrol.graphql_tester import GraphQLTester
+
+        findings: list[Finding] = []
+        for r in GraphQLTester(self.sm, logger=self.log).test(d["base_url"]):
+            findings.append(Finding(
+                type="accesscontrol", subtype="graphql", severity=r.severity, status="new",
+                url=d["base_url"], parameter=r.kind, context="graphql",
+                payload=r.request, request=r.request, response=r.response,
+                title=r.title, description=r.detail,
+                evidence={**r.evidence, "classification": "graphql", "graphql_kind": r.kind,
+                          "cwe": r.cwe, "tier": r.evidence.get("tier", "needs-review")},
+            ))
+        return findings
 
     # ---- race condition / limit overrun ----
     def _test_race(self, d: dict) -> list[Finding]:

@@ -66,7 +66,62 @@ _REFERENCES = [
 ]
 
 
+_AC_REFERENCES = [
+    "CWE-639: Authorization Bypass Through User-Controlled Key (IDOR) — https://cwe.mitre.org/data/definitions/639.html",
+    "CWE-862: Missing Authorization — https://cwe.mitre.org/data/definitions/862.html",
+    "CWE-285: Improper Authorization — https://cwe.mitre.org/data/definitions/285.html",
+    "OWASP API Security Top 10 (API1 BOLA, API3 BOPLA, API5 BFLA) — https://owasp.org/API-Security/",
+    "OWASP Authorization Cheat Sheet — https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html",
+]
+
+_AC_REMEDIATION = {
+    "horizontal": ("Enforce server-side OBJECT-LEVEL authorization (IDOR/BOLA).",
+        "On every request, verify the authenticated principal is permitted to access the "
+        "specific object id — do not trust the id from the client. Deny by default. Prefer "
+        "unguessable/indirect reference maps so ids aren't enumerable.",
+        ["Centralise ownership checks in a policy layer, not per-controller.",
+         "Add automated tests that a second account cannot read the first's objects."]),
+    "graphql": ("Enforce per-RESOLVER object-level authorization in GraphQL.",
+        "Apply authorization in each resolver (and on edges as well as nodes); never assume "
+        "the schema hides data. Validate the caller may access every id argument.",
+        ["Limit query depth/complexity and disable introspection in production.",
+         "Limit aliasing/batching to stop amplified enumeration and 2FA/rate-limit bypass."]),
+    "vertical": ("Enforce FUNCTION-LEVEL authorization (BFLA).",
+        "Check the caller's role/permission for privileged functions server-side, deny by "
+        "default. Do not rely on the UI hiding admin actions.",
+        ["Separate admin routes behind enforced role middleware.",
+         "Log and alert on privileged-function access."]),
+    "unauthenticated": ("Require authentication on protected endpoints.",
+        "Ensure the endpoint mandates a valid session/token before returning any data; deny "
+        "by default for anonymous callers.", ["Add auth middleware coverage tests."]),
+    "object_property": ("Stop mass assignment (BOPLA).",
+        "Allow-list the fields a request may bind; never bind request bodies straight onto "
+        "objects. Reject/ignore privileged fields (role, isAdmin, owner_id) from user input.",
+        ["Use explicit DTOs / serializers with read-only privileged fields."]),
+    "jwt": ("Validate JWTs strictly.",
+        "Pin an explicit algorithm allow-list (reject alg:none and RS256<->HS256 confusion), "
+        "always verify the signature with a strong secret/key, and validate exp/nbf/iss/aud. "
+        "Reject attacker-controlled kid/jwk/jku.",
+        ["Rotate signing keys; store them securely.",
+         "Prefer short-lived tokens + server-side revocation."]),
+    "403bypass": ("Enforce authorization in the APPLICATION, not just the proxy.",
+        "Apply access control in the app layer so path tricks (/..;/, case, encoding) and "
+        "spoofable headers (X-Forwarded-For, X-Original-URL) cannot bypass it. Normalise "
+        "paths before authorization; never trust client IP headers for authz.",
+        ["Test the documented bypass families in CI against protected routes."]),
+    "race": ("Make limited/single-use operations ATOMIC.",
+        "Serialise the check-and-act with database constraints (unique indexes), row locks "
+        "(SELECT ... FOR UPDATE), atomic decrements, or idempotency keys so concurrent "
+        "requests cannot all pass the check.",
+        ["Add a per-resource lock or a DB unique constraint on the one-shot action."]),
+}
+
+
 def remediation_for(subtype: str, context: str) -> Remediation:
+    if subtype in _AC_REMEDIATION:
+        summary, primary, defence = _AC_REMEDIATION[subtype]
+        return Remediation(summary=summary, output_encoding=primary,
+                           defence_in_depth=defence, references=_AC_REFERENCES)
     if subtype == "csp":
         return Remediation(
             summary=(

@@ -107,6 +107,36 @@ class Handler(BaseHTTPRequestHandler):
             return None
         return BY_ID.get(int(claims.get("sub", -1)))
 
+    def _graphql(self, query: str):
+        """A tiny, INTENTIONALLY-VULNERABLE GraphQL endpoint (regex-parsed)."""
+        import re as _re
+        # Introspection is enabled (info disclosure + schema recovery).
+        if "__schema" in query or "__type" in query:
+            return self._send(200, {"data": {"__schema": {
+                "queryType": {"name": "Query"},
+                "types": [
+                    {"name": "Query", "fields": [
+                        {"name": "me", "args": []},
+                        {"name": "user", "args": [{"name": "id"}]}]},
+                    {"name": "User", "fields": [
+                        {"name": "id"}, {"name": "name"}, {"name": "email"},
+                        {"name": "secret"}, {"name": "role"}]},
+                ]}}})
+        # VULN BOLA: user(id: N) returns ANY user's private data, no auth/ownership
+        # check. Supports aliases (so batching/aliasing is unrestricted).
+        data = {}
+        for m in _re.finditer(r"(?:(\w+)\s*:\s*)?user\s*\(\s*id\s*:\s*(\d+)\s*\)", query):
+            alias = m.group(1) or "user"
+            uid = int(m.group(2))
+            u = BY_ID.get(uid)
+            data[alias] = _private(u) if u else None
+        if data:
+            return self._send(200, {"data": data})
+        if "me" in query:
+            me = self._identity()
+            return self._send(200, {"data": {"me": _public(me) if me else None}})
+        return self._send(200, {"data": None, "errors": [{"message": "unknown query"}]})
+
     def _body(self):
         length = int(self.headers.get("Content-Length", 0) or 0)
         raw = self.rfile.read(length) if length else b""
@@ -166,6 +196,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         path = urlparse(self.path).path
         body = self._body()
+
+        if path == "/graphql":
+            return self._graphql(body.get("query", ""))
 
         if path == "/login":
             user = USERS.get(body.get("username", ""))

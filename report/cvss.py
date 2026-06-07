@@ -93,6 +93,25 @@ _SUBTYPE_VECTORS = {
     "stored": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:L/I:L/A:N",
     # Blind: stored-like, often hitting privileged viewers.
     "blind": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:L/I:L/A:N",
+
+    # --- Access control (Prompt 2). Representative vectors; scale C/I to the
+    #     real data sensitivity and number of records reachable. ---
+    # Horizontal IDOR/BOLA: a low-priv user reads another user's data.
+    "horizontal": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N",       # 6.5
+    # GraphQL BOLA: same profile.
+    "graphql": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N",
+    # Vertical BFLA: low-priv reaches an admin function (read+write).
+    "vertical": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:N",          # 8.1
+    # Unauthenticated access to protected data.
+    "unauthenticated": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",   # 7.5
+    # BOPLA / mass assignment -> privilege escalation.
+    "object_property": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:N",   # 8.1
+    # JWT forgery -> full auth bypass / account takeover.
+    "jwt": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N",               # 9.1
+    # 403/authorization bypass.
+    "403bypass": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",         # 7.5
+    # Race condition / limit-overrun (impact varies; medium baseline).
+    "race": "CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:U/C:N/I:H/A:N",             # 5.9
 }
 
 

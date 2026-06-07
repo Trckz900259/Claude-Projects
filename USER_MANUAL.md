@@ -261,3 +261,64 @@ your `callback.interactsh_server` is reachable, and keep `bbp callbacks` running
 
 **It's going too fast / too slow** — tune `rate_limit` in the config
 (`requests_per_second`, `per_host_rps`, `max_concurrency`).
+
+---
+
+## 8. Access Control / IDOR module (Prompt 2)
+
+This module finds **broken access control** — the #1 OWASP API risk — using
+**two or more accounts you control**. It never touches a real third party's data.
+
+### Safety model (enforced in code)
+- **Own-accounts-only:** it refuses to run without ≥2 of *your* authenticated
+  accounts; the "victim" object in every test is always one of *your* accounts.
+- **Read-only proof:** cross-identity replay is GET-only; the only writes target
+  your own object (to test mass assignment). It won't modify others' data.
+- **Fresh/own state for races:** race tests use your own single-use codes.
+- Plus the inherited scope allow-list, rate limiting, User-Agent, and the
+  `automated_scanning_allowed` gate.
+
+### Workflow
+1. Create a **gitignored identities file** (`config/<prog>.identities.local.yml`)
+   with ≥2 of your own accounts. Each has `auth` (cookies/headers) or a `relogin`
+   flow, and `owned_ids` (the object ids that account owns). Reference it from the
+   program profile via `identities_file:`.
+2. `bbp identities <config>` — confirm the accounts load (and ≥2 authenticated).
+3. **Capture** your authenticated browsing: `bbp capture <config> --as userA`
+   (mitmproxy) or `bbp import-traffic <config> --har file.har --as userA`.
+4. `bbp harvest-tokens <config>` — optionally pull tokens to fill profiles.
+5. `bbp discover <config>` — catalogue endpoints (recon + spec + traffic) and
+   classify id parameters.
+6. `bbp scan <config> --module accesscontrol` — run all the engines.
+7. `bbp report <config>` and `bbp dashboard` — review the side-by-side PoCs.
+
+### Glossary (access control)
+- **IDOR / BOLA** (horizontal) — reading/altering *another user's* object by
+  changing an id (broken **object**-level authorization).
+- **BFLA** (vertical) — a low-privilege user reaching an **admin function**
+  (broken **function**-level authorization).
+- **BOPLA / mass assignment** — setting fields you shouldn't (e.g. `role=admin`)
+  because the server binds your whole request body onto the object.
+- **Confidence score / tier** — the decision engine compares response *content*
+  across identities (not just status codes) and scores how likely a violation is
+  (`high-confidence` / `needs-review`). Nothing is auto-confirmed — you verify the
+  side-by-side PoC.
+- **Side-by-side PoC** — the same object retrieved as its owner, then as the
+  attacker identity, returning the same private data.
+- **JWT forgery** — making a valid-looking token the server wrongly accepts
+  (e.g. `alg:none`, or a guessed weak secret) to become another user.
+- **Race condition / limit-overrun** — firing many requests at once to slip past
+  a one-time check (e.g. redeem a single-use coupon many times).
+- **403 bypass** — a "forbidden" endpoint reached anyway via a header or path
+  trick because authorization was only enforced at the proxy/path layer.
+
+### Access-control troubleshooting
+- *"requires at least 2 of YOUR OWN accounts"* — add a second authenticated
+  identity to your identities file.
+- *No findings* — did you capture/import traffic and run `bbp discover` first?
+  The engines need captured requests + a discovered endpoint catalogue.
+- *Race never wins* — race tests run sequentially in a quiet phase; if the action
+  truly serialises server-side, that's a *good* result (no finding).
+- *mitmproxy capture shows nothing* — install mitmproxy's CA cert in your browser
+  (visit `http://mitm.it` while the proxy is set), and confirm the host is in
+  scope (capture is scope-filtered too).

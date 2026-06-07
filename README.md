@@ -202,8 +202,42 @@ is made for them.
       drill-in, recon/coverage, live blind-callback panel, charts). ✅
 
 **Prompt 1 (foundation + XSS module) is complete.** Future prompts add more
-modules (SQLi, SSRF, IDOR, access control, …) by implementing the same
-`Module` interface in `/modules`.
+modules (SQLi, SSRF, …) by implementing the same `Module` interface in `/modules`.
+
+### Prompt 2 — Broken Access Control / IDOR module ✅
+
+A multi-engine module for the #1 OWASP API risk, on a shared multi-identity
+foundation. **Safety: own-accounts-only** (requires ≥2 of *your* accounts; the
+"victim" object is always one of yours), **read-only proof** (cross-identity
+replay is GET-only; the only writes target your own object), and **fresh/own
+state for races** — on top of the inherited scope/rate-limit/UA/rules gates.
+
+- **Foundation:** multi-identity session manager (`core/identity.py`, isolated
+  per-request auth + re-login), cookie-stateless HTTP engine, mitmproxy/HAR
+  capture (`core/capture.py`), race engine with HTTP/2 single-packet + HTTP/1
+  last-byte (`core/race.py`), token harvesting (`core/tokens.py`).
+- **Engines** (`modules/accesscontrol/`): stateful replay + a content-aware
+  **decision engine** with confidence scoring (IDOR/BOLA, BFLA, unauth, BOPLA),
+  a **GraphQL** authz tester, a **JWT** forgery tester, a **race** engine, and a
+  **403-bypass** sub-module.
+
+```bash
+# 1. Define ≥2 of your own test accounts in a gitignored identities file
+#    (config/<prog>.identities.local.yml), then:
+bbp identities      config/myprogram.yml          # check the accounts load
+bbp capture         config/myprogram.yml --as userA   # browse as each (mitmproxy)
+#    or:  bbp import-traffic config/myprogram.yml --har session.har --as userA
+bbp harvest-tokens  config/myprogram.yml          # pull auth tokens from traffic
+bbp discover        config/myprogram.yml [--openapi spec.yml] [--postman c.json]
+bbp scan            config/myprogram.yml --module accesscontrol
+bbp report          config/myprogram.yml
+```
+
+Validated end-to-end against a bundled local vulnerable API
+(`tests/fixtures/vulnerable_api.py`): finds horizontal IDOR (with confidence
+scoring + side-by-side PoC), vertical BFLA, BOPLA, JWT forgery (alg:none + weak
+secret → admin), a race win, 403 bypasses, and GraphQL BOLA. Validate against
+self-hosted OWASP Juice Shop before any real program.
 
 See `USER_MANUAL.md` (added in Stage 4) for a plain-English walkthrough of every
 pipeline stage, a glossary, and troubleshooting.

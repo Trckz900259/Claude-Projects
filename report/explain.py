@@ -49,7 +49,48 @@ _TYPE_PLAIN = {
         "what scripts a page may run. A weak or missing CSP doesn't create XSS by "
         "itself, but it removes a safety net that would otherwise blunt an attack."
     ),
+    # --- access control ---
+    "horizontal": (
+        "Horizontal access control (IDOR/BOLA) means one user can read or change "
+        "ANOTHER user's data just by changing an id in the request — the server "
+        "forgot to check that you actually own that object."
+    ),
+    "graphql": (
+        "GraphQL BOLA is IDOR through a GraphQL resolver: you ask for another "
+        "user's object by id and the resolver hands it over without checking you're "
+        "allowed."
+    ),
+    "vertical": (
+        "Vertical access control (BFLA) means a low-privilege user can reach an "
+        "admin-only function because the server never checks your role."
+    ),
+    "unauthenticated": (
+        "Unauthenticated access means a protected resource is reachable with no "
+        "login at all."
+    ),
+    "object_property": (
+        "BOPLA / mass assignment means you can set fields you shouldn't (like "
+        "role=admin) because the server blindly applies whatever fields you send."
+    ),
+    "jwt": (
+        "A JWT is a signed login token. These weaknesses let you FORGE one — e.g. "
+        "strip the signature (alg:none) or guess a weak signing secret — and become "
+        "any user, including an admin."
+    ),
+    "race": (
+        "A race condition (limit-overrun) means firing many requests at the exact "
+        "same moment slips them all past a one-time check before it updates — e.g. "
+        "redeeming a single-use coupon many times."
+    ),
+    "403bypass": (
+        "A 403 bypass means an endpoint says 'forbidden', but a small trick (a "
+        "spoofed header or a path tweak) gets you in anyway — the block was only "
+        "skin-deep, enforced at the proxy/path layer instead of the app."
+    ),
 }
+
+_AC_SUBTYPES = {"horizontal", "graphql", "vertical", "unauthenticated",
+                "object_property", "jwt", "race", "403bypass"}
 
 _HOW_FOUND = {
     "reflected": (
@@ -107,29 +148,82 @@ def explain_finding(finding: Any, audience: str = "client") -> str:
     return _client(subtype, context, param, url, _evidence(finding))
 
 
+_AC_HOW_FOUND = (
+    "Using two accounts I CONTROL, the platform had my high-priv account read its "
+    "own object (the baseline), then had my second account (or anonymous) request "
+    "the SAME object. The decision engine compared the responses after normalising "
+    "noise — if the attacker identity saw the owner's private data, it's flagged "
+    "with a confidence score. No stranger's data is ever touched."
+)
+
+
 def _learner(subtype: str, context: str, param: str, url: str) -> str:
     parts = []
     parts.append(f"**What this is (in plain English):** {_TYPE_PLAIN.get(subtype, _TYPE_PLAIN['reflected'])}")
+    is_ac = subtype in _AC_SUBTYPES
     if subtype in ("reflected", "stored") and context:
         parts.append(
             f"\n**Where it landed:** your input ended up in the *{context}* part of the "
             f"page. That matters because the fix (and the exploit) is different for each "
             f"place — text in the page body, inside an attribute, inside a script, etc."
         )
-    parts.append(f"\n**How the platform found it:** {_HOW_FOUND.get(subtype, _HOW_FOUND['reflected'])}")
-    parts.append(
-        "\n**Why it matters:** if an attacker can run JavaScript in another user's "
-        "session, they can do things AS that user — steal session cookies, perform "
-        "actions on their behalf, capture what they type, or pivot deeper. That's why "
-        "even a 'just an alert box' proof is taken seriously: the alert proves arbitrary "
-        "code ran."
-    )
+    how = _AC_HOW_FOUND if is_ac else _HOW_FOUND.get(subtype, _HOW_FOUND["reflected"])
+    parts.append(f"\n**How the platform found it:** {how}")
+    if is_ac:
+        parts.append(
+            "\n**Why it matters:** broken access control lets one user reach another "
+            "user's data or admin-only actions. It's the #1 web/API risk because the "
+            "data is real and the blast radius scales with how many records are reachable."
+        )
+    else:
+        parts.append(
+            "\n**Why it matters:** if an attacker can run JavaScript in another user's "
+            "session, they can do things AS that user — steal session cookies, perform "
+            "actions on their behalf, capture what they type, or pivot deeper. That's why "
+            "even a 'just an alert box' proof is taken seriously: the alert proves arbitrary "
+            "code ran."
+        )
     if param:
-        parts.append(f"\n**The exact spot:** parameter `{param}` on `{url}`.")
+        parts.append(f"\n**The exact spot:** `{param}` on `{url}`.")
     return "\n".join(parts)
 
 
+_AC_ROOT_CAUSE = {
+    "horizontal": "The server does not perform an object-level ownership check, so an "
+        "authenticated user can retrieve another user's object by supplying its id (IDOR/BOLA).",
+    "graphql": "A GraphQL resolver returns another user's object by id with no per-resolver "
+        "object-level authorization (BOLA).",
+    "vertical": "A privileged function lacks a server-side role/permission check, so a "
+        "lower-privilege account can invoke it (BFLA).",
+    "unauthenticated": "A protected resource is served without requiring authentication.",
+    "object_property": "The endpoint binds request fields directly onto the object, so "
+        "unexpected privileged fields (e.g. role) are accepted (BOPLA / mass assignment).",
+    "jwt": "The JWT implementation fails to verify tokens correctly (e.g. accepts alg:none "
+        "or a weak/guessable secret), allowing forged tokens for arbitrary identities.",
+    "race": "A check-then-act on a limited/single-use action is not atomic, so concurrent "
+        "requests all pass the check before state updates (TOCTOU).",
+    "403bypass": "Authorization is enforced at the proxy/path layer rather than the "
+        "application, so path/header tricks reach the protected resource.",
+}
+
+
 def _client(subtype: str, context: str, param: str, url: str, evidence: dict) -> str:
+    if subtype in _AC_ROOT_CAUSE:
+        conf = evidence.get("confidence")
+        parts = [f"**Root cause:** {_AC_ROOT_CAUSE[subtype]}"]
+        if conf is not None:
+            parts.append(f"\nDecision-engine confidence: {conf} (tier: {evidence.get('tier','?')}; "
+                         f"content similarity {evidence.get('similarity','?')}). This is surfaced for "
+                         f"human review + side-by-side verification, not auto-confirmed.")
+        parts.append(
+            "\n**Attack scenario:** An attacker authenticated as a normal (or no) account "
+            "accesses data or functions belonging to other users / higher privilege levels.")
+        parts.append(
+            "\n**Business impact:** Scales with data sensitivity and the number of records "
+            "reachable — from per-user data exposure to full account takeover and admin "
+            "compromise. (This finding used only my own test accounts.)")
+        return "\n".join(parts)
+
     parts = []
     if subtype == "dom":
         src = evidence.get("source", "a client-side source")
