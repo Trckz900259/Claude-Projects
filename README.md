@@ -198,7 +198,12 @@ is made for them.
       blind/OOB scaffolding; Playwright proof + screenshots). ✅
 - [x] **Stage 4 — Reporting + explain engine + USER_MANUAL.md** (Markdown + PDF,
       CVSS v3.1, context-specific remediation, two-audience explanations). ✅
-- [ ] **Stage 5 — Dashboard.**
+- [x] **Stage 5 — Dashboard** (Streamlit: overview, filterable findings with
+      drill-in, recon/coverage, live blind-callback panel, charts). ✅
+
+**Prompt 1 (foundation + XSS module) is complete.** Future prompts add more
+modules (SQLi, SSRF, IDOR, access control, …) by implementing the same
+`Module` interface in `/modules`.
 
 See `USER_MANUAL.md` (added in Stage 4) for a plain-English walkthrough of every
 pipeline stage, a glossary, and troubleshooting.
