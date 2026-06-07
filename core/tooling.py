@@ -44,6 +44,17 @@ TOOLS: list[ExternalTool] = [
     ExternalTool("interactsh-client", "Out-of-band (blind XSS) callback listener",
                  "callback",
                  "go install github.com/projectdiscovery/interactsh/cmd/interactsh-client@latest"),
+    # --- Access-control module (Prompt 2). All optional — wrapped when present. ---
+    ExternalTool("mitmdump", "Proxy capture of authenticated traffic", "accesscontrol",
+                 "pip install mitmproxy", kind="pip"),
+    ExternalTool("ffuf", "Variant fuzzing for 403 bypass", "accesscontrol",
+                 "go install github.com/ffuf/ffuf/v2@latest"),
+    ExternalTool("nomore403", "403/401 bypass permutations", "accesscontrol",
+                 "go install github.com/devploit/nomore403@latest"),
+    ExternalTool("jwt_tool", "Heavy-lifting JWT attacks (optional)", "accesscontrol",
+                 "pipx install jwt_tool  # or git clone ticarpi/jwt_tool", kind="other"),
+    ExternalTool("clairvoyance", "GraphQL schema reconstruction (introspection off)",
+                 "accesscontrol", "pip install clairvoyance", kind="pip"),
 ]
 
 
