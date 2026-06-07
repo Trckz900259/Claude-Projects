@@ -87,10 +87,42 @@ _TYPE_PLAIN = {
         "spoofed header or a path tweak) gets you in anyway — the block was only "
         "skin-deep, enforced at the proxy/path layer instead of the app."
     ),
+    # --- SSRF ---
+    "ssrf": (
+        "SSRF (Server-Side Request Forgery) means you can make the SERVER fetch a "
+        "URL of your choosing. The server is usually trusted inside the network, so "
+        "you can reach things you normally can't — internal services, or the cloud "
+        "metadata endpoint that holds the machine's credentials."
+    ),
+    "blind-ssrf": (
+        "Blind SSRF is SSRF where you DON'T see the fetched response. You prove it "
+        "by making the server call a listener you control and watching the callback "
+        "arrive — even if the response never comes back to you."
+    ),
+    "cloud-metadata": (
+        "Cloud-metadata SSRF reaches the special internal address (169.254.169.254) "
+        "that hands out the machine's cloud credentials. Reading it can mean full "
+        "cloud-account compromise — so we only PROVE we can read it (possession "
+        "proof) and never use the credentials."
+    ),
+    "internal-service": (
+        "This SSRF reaches an INTERNAL service (e.g. a Spring Boot Actuator, Redis, "
+        "or Docker API) that isn't meant to be exposed. We read a harmless marker to "
+        "prove reachability; a heapdump can leak passwords and keys."
+    ),
 }
 
 _AC_SUBTYPES = {"horizontal", "graphql", "vertical", "unauthenticated",
                 "object_property", "jwt", "race", "403bypass"}
+_SSRF_SUBTYPES = {"ssrf", "blind-ssrf", "cloud-metadata", "internal-service"}
+
+_SSRF_HOW_FOUND = (
+    "The platform injected a URL pointing at a collaborator server it controls "
+    "(with a unique token) into the input, and the server fetched it — the callback "
+    "(source-discriminated to rule out link scanners) confirms SSRF. For cloud/"
+    "internal reach, it then asked the server to fetch the metadata/internal URL and "
+    "captured the READ-ONLY response as proof."
+)
 
 _HOW_FOUND = {
     "reflected": (
@@ -161,15 +193,24 @@ def _learner(subtype: str, context: str, param: str, url: str) -> str:
     parts = []
     parts.append(f"**What this is (in plain English):** {_TYPE_PLAIN.get(subtype, _TYPE_PLAIN['reflected'])}")
     is_ac = subtype in _AC_SUBTYPES
+    is_ssrf = subtype in _SSRF_SUBTYPES
     if subtype in ("reflected", "stored") and context:
         parts.append(
             f"\n**Where it landed:** your input ended up in the *{context}* part of the "
             f"page. That matters because the fix (and the exploit) is different for each "
             f"place — text in the page body, inside an attribute, inside a script, etc."
         )
-    how = _AC_HOW_FOUND if is_ac else _HOW_FOUND.get(subtype, _HOW_FOUND["reflected"])
+    how = (_SSRF_HOW_FOUND if is_ssrf else
+           _AC_HOW_FOUND if is_ac else _HOW_FOUND.get(subtype, _HOW_FOUND["reflected"]))
     parts.append(f"\n**How the platform found it:** {how}")
-    if is_ac:
+    if is_ssrf:
+        parts.append(
+            "\n**Why it matters:** SSRF's impact ceiling is full cloud-account "
+            "compromise (stealing the machine's credentials from the metadata service) "
+            "or reaching internal systems for remote code execution. Even a blind "
+            "callback proves the server can be steered to attacker-chosen destinations."
+        )
+    elif is_ac:
         parts.append(
             "\n**Why it matters:** broken access control lets one user reach another "
             "user's data or admin-only actions. It's the #1 web/API risk because the "
@@ -207,7 +248,39 @@ _AC_ROOT_CAUSE = {
 }
 
 
+_SSRF_ROOT_CAUSE = {
+    "ssrf": "The application fetches a user-supplied URL server-side without an "
+        "allow-list, so an attacker steers the server's outbound request to internal "
+        "or attacker-chosen destinations (SSRF).",
+    "blind-ssrf": "A user-supplied URL is fetched server-side (no response returned), "
+        "confirmed by a target-originated out-of-band callback.",
+    "cloud-metadata": "SSRF reaches the cloud instance-metadata endpoint, exposing the "
+        "instance's IAM credentials. (Captured read-only as possession proof; the "
+        "credentials were NOT used or exfiltrated-and-used.)",
+    "internal-service": "SSRF reaches an internal, unauthenticated service "
+        "(e.g. Spring Actuator/Redis/Docker) that should not be reachable from the "
+        "application's request path.",
+}
+
+
 def _client(subtype: str, context: str, param: str, url: str, evidence: dict) -> str:
+    if subtype in _SSRF_ROOT_CAUSE:
+        parts = [f"**Root cause:** {_SSRF_ROOT_CAUSE[subtype]}"]
+        if evidence.get("bypass"):
+            parts.append(f"\nA filter was bypassed using: {evidence['bypass']}.")
+        if evidence.get("secrets_seen"):
+            parts.append(f"\nThe reachable response leaked: {', '.join(evidence['secrets_seen'])}.")
+        if evidence.get("scanner_excluded"):
+            parts.append(f"\n{evidence['scanner_excluded']} third-party link-scanner "
+                         f"callback(s) were excluded as false positives (source discrimination).")
+        parts.append(
+            "\n**Attack scenario:** An attacker uses the server as a proxy into the "
+            "internal network and cloud control plane.")
+        parts.append(
+            "\n**Business impact:** Ranges from internal reconnaissance to full cloud-"
+            "account compromise (metadata credentials) and internal RCE.")
+        return "\n".join(parts)
+
     if subtype in _AC_ROOT_CAUSE:
         conf = evidence.get("confidence")
         parts = [f"**Root cause:** {_AC_ROOT_CAUSE[subtype]}"]

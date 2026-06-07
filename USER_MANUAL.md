@@ -322,3 +322,57 @@ This module finds **broken access control** — the #1 OWASP API risk — using
 - *mitmproxy capture shows nothing* — install mitmproxy's CA cert in your browser
   (visit `http://mitm.it` while the proxy is set), and confirm the host is in
   scope (capture is scope-filtered too).
+
+---
+
+## 9. SSRF module (Prompt 3)
+
+This module finds **Server-Side Request Forgery** — getting the *server* to make
+requests for you. Its impact ceiling is cloud-account compromise and internal
+RCE, so the proofs are deliberately minimal.
+
+### Safety model (enforced in code)
+- **Possession-proof only:** cloud-metadata credentials are read READ-ONLY to
+  show exposure — never used, exfiltrated-and-used, or pivoted with.
+- **Minimal-impact internal proofs:** read a benign marker (Actuator `_links`,
+  Redis `INFO`); any created state (e.g. a gateway route) is auto-cleaned.
+- **Source discrimination:** only **target-originated** callbacks count; Slack/
+  Outlook/etc. link-scanner unfurls are flagged as false positives.
+- **DNS rebinding only toward authorized targets**, scope on every outbound +
+  callback, and a per-program `ssrf_testing_allowed` rule (set it `false` to
+  forbid SSRF/metadata testing — the module refuses).
+
+### How OOB confirmation works
+The platform injects a URL pointing at a **collaborator** it controls (with a
+unique token) into each input. If the server fetches it, the callback confirms
+SSRF — even when you can't see the response (*blind* SSRF). Two backends: a
+**local collaborator** (for localhost labs, default) and **interactsh**
+(`--interactsh`, for real targets — public DNS/HTTP/TCP).
+
+### Workflow
+```bash
+# discover inputs first (recon/capture), review, then test:
+bbp discover config/myprogram.yml
+bbp scan     config/myprogram.yml --module ssrf --interactsh
+bbp report   config/myprogram.yml ; bbp dashboard   # OOB panel shows callbacks
+```
+
+### Glossary (SSRF)
+- **SSRF** — making the server fetch an attacker-chosen URL.
+- **Full vs blind** — *full* reflects the fetched response back to you; *blind* is
+  confirmed only by the out-of-band callback.
+- **Cloud metadata** — the internal `169.254.169.254` endpoint holding the
+  machine's cloud credentials; reading it can mean full account compromise.
+- **Filter bypass** — encoding the internal IP (decimal/hex/octal/IPv6) or
+  confusing the URL parser so a blocklist doesn't recognise it.
+- **DNS rebinding** — flip a hostname's IP between a safe one (for the filter's
+  check) and the internal target (for the fetch) — a TOCTOU.
+- **Source discrimination** — distinguishing a callback from the *target* (real
+  SSRF) vs a third-party link scanner (false positive).
+
+### SSRF troubleshooting
+- *No callbacks on a real target* — use `--interactsh` (a localhost collaborator
+  can't be reached by a remote target), and check the program allows SSRF testing.
+- *"forbidden by program rules"* — `rules.ssrf_testing_allowed: false` is set.
+- *DNS-only callback, no HTTP* — server-side resolution is confirmed but an egress
+  filter likely blocks outbound HTTP (still a finding, lower confidence).

@@ -55,6 +55,15 @@ TOOLS: list[ExternalTool] = [
                  "pipx install jwt_tool  # or git clone ticarpi/jwt_tool", kind="other"),
     ExternalTool("clairvoyance", "GraphQL schema reconstruction (introspection off)",
                  "accesscontrol", "pip install clairvoyance", kind="pip"),
+    # --- SSRF module (Prompt 3). All optional — wrapped when present. ---
+    ExternalTool("ssrfmap", "SSRF exploitation (cloud/portscan/redis/...)", "ssrf",
+                 "git clone https://github.com/swisskyrepo/SSRFmap", kind="other"),
+    ExternalTool("gopherus", "gopher:// payloads (Redis/MySQL/FastCGI/SMTP)", "ssrf",
+                 "git clone https://github.com/tarunkant/Gopherus", kind="other"),
+    ExternalTool("ipfuscator", "IP-encoding bypass variants", "ssrf",
+                 "git clone https://github.com/vysecurity/IPFuscator", kind="other"),
+    ExternalTool("nuclei", "SSRF templates (quick wins)", "ssrf",
+                 "go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest"),
 ]
 
 

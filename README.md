@@ -239,6 +239,35 @@ scoring + side-by-side PoC), vertical BFLA, BOPLA, JWT forgery (alg:none + weak
 secret → admin), a race win, 403 bypasses, and GraphQL BOLA. Validate against
 self-hosted OWASP Juice Shop before any real program.
 
+### Prompt 3 — Server-Side Request Forgery (SSRF) module ✅
+
+SSRF's impact ceiling is cloud-account compromise and internal RCE, so the
+safety rules are enforced in code: **possession-proof only** (cloud metadata is
+read READ-ONLY; credentials are never used/exfiltrated-and-used/pivoted),
+**minimal-impact** internal proofs with **auto-cleanup**, **DNS rebinding only
+toward authorized targets**, scope on every outbound + callback, and a
+per-program `ssrf_testing_allowed` rule the module respects.
+
+- **Shared infra:** `core/oob.py` (multi-protocol OOB engine with unique tokens +
+  **source discrimination** — only target-originated callbacks count, link
+  scanners are flagged), `core/rebind.py` (DNS rebinding with a scope gate),
+  `verify/browser_fetch.py` (custom method/header fetch for IMDSv2-style targets).
+- **Engines** (`modules/ssrf/`): URL-input discovery (HUNT params + headers),
+  OOB confirmation (full/blind), a filter **bypass generator** (IP encodings,
+  parser confusion, allowlist evasion), the full **cloud-metadata matrix**
+  (AWS/Azure/GCP/OCI/…), an **internal-service catalog** (Spring Actuator heapdump
+  → secret scan, Redis, Docker…), and protocol/file-format payload generators.
+
+```bash
+bbp scan config/myprogram.yml --module ssrf            # local collaborator (labs)
+bbp scan config/myprogram.yml --module ssrf --interactsh   # real targets (OOB)
+```
+
+Validated against a bundled SSRF lab (`tests/fixtures/vulnerable_ssrf.py`): full
+SSRF (OOB callback), blind SSRF, cloud-metadata exposure (direct **and** via a
+decimal-IP filter bypass, possession-proof only), and internal Spring Actuator
+with heapdump secrets scanned. CWE-918. **103 tests pass.**
+
 See `USER_MANUAL.md` (added in Stage 4) for a plain-English walkthrough of every
 pipeline stage, a glossary, and troubleshooting.
 

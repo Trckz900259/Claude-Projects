@@ -175,6 +175,13 @@ class SsrfModule(Module):
         scanner_hits = [i for i in hits if i.source_class == "third_party_scanner"]
         full = "recorded" in (resp.text or "")   # our collaborator's reflected signature
 
+        # Persist callbacks (with source-discrimination tag) for the dashboard.
+        for i in hits:
+            self.ctx.datastore.record_callback(
+                self.ctx.program_id, correlation_id=i.correlation_id, interaction=i.protocol,
+                source_ip=i.source_ip, origin=f"{i.source_class}: {i.source_detail}",
+                raw=i.raw)
+
         if not target_hits and not full:
             return []
         subtype = "ssrf" if full else "blind-ssrf"

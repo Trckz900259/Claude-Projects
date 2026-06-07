@@ -112,6 +112,14 @@ _SUBTYPE_VECTORS = {
     "403bypass": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",         # 7.5
     # Race condition / limit-overrun (impact varies; medium baseline).
     "race": "CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:U/C:N/I:H/A:N",             # 5.9
+
+    # --- SSRF (Prompt 3, CWE-918). Scale to what's reachable. ---
+    "ssrf": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:C/C:H/I:L/A:N",             # ~8.5 high
+    "blind-ssrf": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:C/C:L/I:N/A:N",       # ~5.0 medium
+    # Cloud metadata creds = account compromise.
+    "cloud-metadata": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H",   # ~10 critical
+    # Internal service (RCE-capable, e.g. Actuator/Redis/Docker).
+    "internal-service": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:N", # ~9.6 critical
 }
 
 

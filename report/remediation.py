@@ -117,7 +117,45 @@ _AC_REMEDIATION = {
 }
 
 
+_SSRF_REFERENCES = [
+    "CWE-918: Server-Side Request Forgery — https://cwe.mitre.org/data/definitions/918.html",
+    "OWASP SSRF Prevention Cheat Sheet — https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html",
+    "OWASP Top 10 — SSRF (A10:2021; A01:2025 Broken Access Control) — https://owasp.org/Top10/",
+]
+
+_SSRF_REMEDIATION = {
+    "_default": ("Validate outbound URLs with an ALLOWLIST and pin DNS.",
+        "Accept only an allow-list of schemes (https), hosts, and ports — never a "
+        "blocklist. Resolve the host ONCE and connect to that exact IP (DNS pinning) "
+        "to defeat rebinding; reject literal/encoded internal/link-local IPs "
+        "(127.0.0.0/8, 169.254.0.0/16, 10/8, 172.16/12, 192.168/16, ::1, fc00::/7). "
+        "Disable unused URL schemes (gopher/dict/file/ftp/...). Do NOT follow "
+        "user-controlled redirects. Send fetches from an isolated egress with no "
+        "metadata/internal access.",
+        ["Network-block 169.254.169.254 and 169.254.170.2 from app egress.",
+         "Strip/decode and re-validate the URL after every redirect hop."]),
+    "cloud-metadata": ("Enforce IMDSv2 and block the metadata endpoint.",
+        "Require IMDSv2 (HttpTokens=required) with a low hop limit (1), or block "
+        "169.254.169.254/169.254.170.2 at the host/network. Use least-privilege "
+        "instance roles. Then fix the SSRF itself (allowlist + DNS pinning).",
+        ["Rotate any exposed credentials immediately.",
+         "Alert on metadata access from application processes."]),
+    "internal-service": ("Fix the SSRF and harden the internal service.",
+        "Allowlist outbound destinations (above) AND require auth + network "
+        "segmentation on internal services. For Spring Boot, disable/secure "
+        "Actuator (management.endpoints.web.exposure.include minimal; never expose "
+        "heapdump/env/gateway unauthenticated).",
+        ["Put internal services on a network the app egress cannot reach.",
+         "Authenticate internal admin/management endpoints."]),
+}
+
+
 def remediation_for(subtype: str, context: str) -> Remediation:
+    if subtype in ("ssrf", "blind-ssrf", "cloud-metadata", "internal-service"):
+        key = subtype if subtype in _SSRF_REMEDIATION else "_default"
+        summary, primary, defence = _SSRF_REMEDIATION[key]
+        return Remediation(summary=summary, output_encoding=primary,
+                           defence_in_depth=defence, references=_SSRF_REFERENCES)
     if subtype in _AC_REMEDIATION:
         summary, primary, defence = _AC_REMEDIATION[subtype]
         return Remediation(summary=summary, output_encoding=primary,
