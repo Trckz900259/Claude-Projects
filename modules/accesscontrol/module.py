@@ -39,6 +39,12 @@ from modules.base import Candidate, Module
 _BOPLA_FIELDS = {"role": "admin", "isAdmin": True, "is_admin": True,
                  "admin": True, "owner_id": 0, "verified": True}
 
+# Path/body keywords that suggest a single-use or rate-limited security action
+# worth race-testing (with my OWN fresh state).
+_RACE_KEYWORDS = ("redeem", "coupon", "voucher", "promo", "gift", "withdraw",
+                  "transfer", "balance", "invite", "retest", "claim", "apply",
+                  "vote", "topup", "refund", "checkout", "purchase")
+
 
 def _privileged_path(path: str) -> bool:
     p = (path or "").lower()
@@ -62,6 +68,9 @@ class AccessControlModule(Module):
         self.sweep = sweep            # controlled sequential sweep (opt-in)
         self.sweep_span = sweep_span
         self.max_pairs = max_pairs
+        # Race targets are run SEQUENTIALLY in teardown (not in the concurrent
+        # worker pool), because a race burst needs the timing to itself.
+        self._race_targets: list[dict] = []
         # No network here — just loads profiles + persists metadata.
         self.sm = ctx.session_manager()
 
@@ -70,6 +79,20 @@ class AccessControlModule(Module):
         self.ctx.require_automated_scanning("access-control scan")
         self.sm.require_min(2)        # OWN-ACCOUNTS-ONLY gate
         self.sm.prime()               # fetch/refresh tokens
+
+    def teardown(self) -> None:
+        # Run race tests now, sequentially, with the concurrent pool finished, so
+        # each burst has the timing window to itself (reliable single-packet /
+        # last-byte sync). Findings go straight to the datastore.
+        if self._race_targets:
+            self.log.info("Running %d race test(s) sequentially (isolated)...",
+                          len(self._race_targets))
+        for d in self._race_targets:
+            try:
+                for finding in self._test_race(d):
+                    self.ctx.datastore.record_finding(self.ctx.program_id, finding)
+            except Exception as exc:
+                self.log.warning("race test on %s failed: %s", d.get("url"), exc)
 
     # -- candidate generation ---------------------------------------------
     def build_candidates(self) -> list[Candidate]:
@@ -111,6 +134,11 @@ class AccessControlModule(Module):
         seen_eps: set[tuple] = set()
         for row in ds.get_captured(pid):
             method = (row["method"] or "GET").upper()
+            # READ-ONLY proof: only replay safe (read) requests across identities.
+            # Never re-send a captured POST/PUT/DELETE under another identity — that
+            # could modify state or another account's data.
+            if method != "GET":
+                continue
             url = row["url"]
             key = (method, urlparse(url).path)
             if key in seen_eps:
@@ -133,6 +161,10 @@ class AccessControlModule(Module):
             body = row["req_body"] or ""
             if not body.strip().startswith("{"):
                 continue
+            # Skip single-use/limited ACTION endpoints — those are tested by the
+            # race engine; re-sending them here would consume that one-shot state.
+            if any(k in urlparse(row["url"]).path.lower() for k in _RACE_KEYWORDS):
+                continue
             ident = row["captured_as"] or (auth[0] if auth else "")
             if not ident:
                 continue
@@ -141,9 +173,30 @@ class AccessControlModule(Module):
                 "identity": ident, "base_body": body,
             }))
 
+        # --- RACE conditions (single-use / limited actions; OWN fresh state) ---
+        captured = ds.get_captured(pid)
+        for row in captured:
+            method = (row["method"] or "GET").upper()
+            if method not in ("POST", "PUT", "PATCH"):
+                continue
+            path = urlparse(row["url"]).path.lower()
+            body = (row["req_body"] or "").lower()
+            if any(k in path or k in body for k in _RACE_KEYWORDS):
+                # Collected for the isolated teardown phase, NOT enqueued.
+                self._race_targets.append({
+                    "method": method, "url": row["url"],
+                    "body": row["req_body"] or "", "req_headers": row["req_headers"]})
+
+        # --- 403/401 bypass (endpoints observed returning forbidden) ---
+        seen_forbidden: set[str] = set()
+        for row in captured:
+            if (row["status_code"] or 0) in (401, 403) and row["url"] not in seen_forbidden:
+                seen_forbidden.add(row["url"])
+                candidates.append(Candidate(self.name, {
+                    "kind": "bypass", "url": row["url"], "baseline": row["status_code"]}))
+
         # --- JWT forgery (one candidate per distinct token in captured traffic) ---
         from core.tokens import harvest_traffic
-        captured = ds.get_captured(pid)
         oracle = self._find_oracle(captured)
         if oracle:
             jwts = {t.value for t in harvest_traffic(captured) if t.type == "jwt"}
@@ -207,7 +260,80 @@ class AccessControlModule(Module):
             return self._test_sweep(candidate.data)
         if kind == "jwt":
             return self._test_jwt(candidate.data)
+        if kind == "race":
+            return self._test_race(candidate.data)
+        if kind == "bypass":
+            return self._test_bypass(candidate.data)
         return []
+
+    # ---- race condition / limit overrun ----
+    def _test_race(self, d: dict) -> list[Finding]:
+        from core.race import RaceEngine
+
+        try:
+            headers = json.loads(d.get("req_headers") or "{}")
+        except Exception:
+            headers = {}
+        send = {k: v for k, v in headers.items()
+                if k.lower() in ("authorization", "content-type", "cookie")}
+        eng = RaceEngine(self.ctx.config.scope, self.ctx.config.http.user_agent,
+                         verify_tls=self.ctx.config.http.verify_tls, logger=self.log)
+        res = eng.race(d["url"], method=d["method"], headers=send, body=d.get("body", ""), count=20)
+        if res.successes <= 1:
+            return []  # properly serialised — no race
+
+        # IMPACT GATE: is the same outcome trivially achievable another way?
+        account_scoped = any(k.lower() in ("authorization", "cookie") for k in send)
+        if account_scoped:
+            severity = "medium"
+            impact = ("Account-scoped action: a fresh account might achieve the same "
+                      "outcome — assess real business impact (could be low).")
+        else:
+            severity = "high"
+            impact = "Global/unauthenticated single-use action over-applied — likely high impact."
+
+        return [Finding(
+            type="accesscontrol", subtype="race", severity=severity, status="new",
+            url=d["url"], parameter="", context=f"race x{res.count} ({res.mode})",
+            payload=f"{res.count} concurrent {d['method']} via {res.mode}",
+            request=f"{d['method']} {d['url']}\n\n{d.get('body', '')}",
+            response=f"status distribution: {res.status_distribution}; successes: {res.successes}",
+            title=f"Race condition / limit-overrun: {res.successes}/{res.count} succeeded",
+            description=(
+                f"Firing {res.count} concurrent requests ({res.mode}) produced "
+                f"{res.successes} successes on a single-use/limited action (expected 1). "
+                f"{impact} Used my own fresh state only."),
+            evidence={"classification": "race", "cwe": "CWE-362", "mode": res.mode,
+                      "successes": res.successes, "count": res.count,
+                      "status_distribution": res.status_distribution,
+                      "impact_gate": impact, "tier": "needs-review"},
+        )]
+
+    # ---- 403 / access-control bypass ----
+    def _test_bypass(self, d: dict) -> list[Finding]:
+        from modules.accesscontrol.bypass import BypassTester
+
+        results = BypassTester(self.ctx.http, logger=self.log).test(d["url"])
+        wins = [r for r in results if r.bypassed]
+        if not wins:
+            return []
+        techniques = ", ".join(f"{r.technique}({r.status})" for r in wins)
+        return [Finding(
+            type="accesscontrol", subtype="403bypass", severity="high", status="new",
+            url=d["url"], parameter="", context="403-bypass",
+            payload=techniques,
+            request=f"GET {d['url']}  (+ bypass variants)",
+            response="; ".join(f"{r.technique} -> {r.status}" for r in wins),
+            title=f"403/401 bypass: {len(wins)} technique(s) reached the resource",
+            description=(
+                f"{d['url']} returns {d['baseline']} normally, but these bypasses returned "
+                f"2xx: {techniques}. Authorization is enforced inconsistently (e.g. at the "
+                f"proxy/path layer rather than in the application)."),
+            evidence={"classification": "403bypass", "cwe": "CWE-863",
+                      "baseline": d["baseline"], "tier": "high-confidence",
+                      "working": [{"technique": r.technique, "detail": r.detail,
+                                   "status": r.status} for r in wins]},
+        )]
 
     # ---- JWT forgery ----
     def _test_jwt(self, d: dict) -> list[Finding]:

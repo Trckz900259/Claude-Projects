@@ -28,6 +28,7 @@ PLAN = [
     ("userB", "GET", "/api/users/2/orders", None),
     ("userA", "POST", "/api/profile", '{"name": "Alice2"}'),
     ("userB", "GET", "/admin/stats", None),
+    ("userB", "GET", "/admin/secret", None),   # returns 403 -> bypass candidate
 ]
 
 
@@ -48,6 +49,16 @@ def main():
             resp_body=res.text, captured_as=ident, source="seed",
         )
         n += 1
+
+    # Synthesise a coupon-redeem request SHAPE (not actually sent, so the
+    # single-use coupon stays fresh) so the race detector has a candidate.
+    ctx.datastore.add_captured(
+        ctx.program_id, method="POST", url=BASE + "/api/redeem", host="127.0.0.1",
+        req_headers={"Content-Type": "application/json"}, req_body='{"code": "WELCOME50"}',
+        status_code=200, resp_headers={}, resp_body='{"redeemed": "WELCOME50"}',
+        captured_as="userA", source="seed",
+    )
+    n += 1
     print(f"seeded {n} captured request(s) into {config}")
     ctx.close()
 
