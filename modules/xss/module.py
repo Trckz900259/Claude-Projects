@@ -35,6 +35,7 @@ from modules.xss.context import classify_reflections, ReflectionContext
 from modules.xss.csp import CSPIssue
 from modules.xss.dalfox import run_dalfox
 from modules.xss.dom import DomAnalyzer
+from modules.xss.narrow import gf_xss_priority_urls
 from modules.xss.payloads import new_marker, payloads_for
 from modules.xss.reflection import inject_param, probe_reflection
 from report.cvss import score_for_subtype
@@ -104,17 +105,26 @@ class XssModule(Module):
         ds, pid = self.ctx.datastore, self.ctx.program_id
         candidates: list[Candidate] = []
 
-        # One reflected candidate per (url, parameter).
+        # gf flags XSS-likely URLs (pure pattern match, no network) so we test
+        # the most promising parameters first — without skipping anything.
+        param_rows = list(ds.get_parameters(pid))
+        priority_urls = gf_xss_priority_urls([r["url"] for r in param_rows], self.log)
+
+        # One reflected candidate per (url, parameter); priority ones come first.
+        reflected: list[Candidate] = []
         seen_params: set[tuple[str, str]] = set()
-        for row in ds.get_parameters(pid):
+        for row in param_rows:
             key = (row["url"], row["name"])
             if key in seen_params:
                 continue
             seen_params.add(key)
-            candidates.append(Candidate(self.name, {
+            reflected.append(Candidate(self.name, {
                 "kind": "reflected", "url": row["url"],
                 "param": row["name"], "param_type": row["param_type"],
+                "priority": row["url"] in priority_urls,
             }))
+        reflected.sort(key=lambda c: not c.data.get("priority"))  # priority first
+        candidates.extend(reflected)
 
         # One dom candidate per distinct page URL.
         seen_pages: set[str] = set()
