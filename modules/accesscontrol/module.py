@@ -141,12 +141,38 @@ class AccessControlModule(Module):
                 "identity": ident, "base_body": body,
             }))
 
+        # --- JWT forgery (one candidate per distinct token in captured traffic) ---
+        from core.tokens import harvest_traffic
+        captured = ds.get_captured(pid)
+        oracle = self._find_oracle(captured)
+        if oracle:
+            jwts = {t.value for t in harvest_traffic(captured) if t.type == "jwt"}
+            for tok in jwts:
+                candidates.append(Candidate(self.name, {
+                    "kind": "jwt", "token": tok, "oracle_url": oracle}))
+
         # --- controlled sequential sweep (opt-in only) ---
         if self.sweep:
             candidates.extend(self._sweep_candidates(id_endpoints, auth))
 
         self.log.info("Built %d access-control candidates", len(candidates))
         return candidates
+
+    @staticmethod
+    def _find_oracle(captured) -> str:
+        """Find a captured GET that echoes the caller's identity (e.g. /api/me)."""
+        best = ""
+        for row in captured:
+            if (row["method"] or "GET").upper() != "GET":
+                continue
+            if not (200 <= (row["status_code"] or 0) < 300):
+                continue
+            path = row["url"].lower()
+            if any(h in path for h in ("/me", "/profile", "/account", "/whoami", "/self")):
+                return row["url"]
+            if not best:
+                best = row["url"]
+        return best
 
     def _sweep_candidates(self, id_endpoints, auth) -> list[Candidate]:
         """Explicitly-authorised, controlled, READ-ONLY sequential id sweep."""
@@ -179,7 +205,35 @@ class AccessControlModule(Module):
             return self._test_bopla(candidate.data)
         if kind == "sweep":
             return self._test_sweep(candidate.data)
+        if kind == "jwt":
+            return self._test_jwt(candidate.data)
         return []
+
+    # ---- JWT forgery ----
+    def _test_jwt(self, d: dict) -> list[Finding]:
+        from modules.accesscontrol.jwt_tester import JwtTester
+
+        tester = JwtTester(self.ctx.http, logger=self.log)
+        findings: list[Finding] = []
+        for r in tester.test_token(d["token"], d["oracle_url"]):
+            if not r.accepted:
+                continue
+            findings.append(Finding(
+                type="accesscontrol", subtype="jwt",
+                severity="high" if r.escalated_to else "medium", status="new",
+                url=d["oracle_url"], parameter=r.test, context="jwt",
+                payload=(r.forged_token or "")[:300],
+                request=f"GET {d['oracle_url']}\nAuthorization: Bearer {(r.forged_token or '')[:60]}...",
+                response=r.response_excerpt,
+                title=f"JWT weakness: {r.test} accepted"
+                      + (f" (escalated to {r.escalated_to})" if r.escalated_to else ""),
+                description=r.detail,
+                evidence={"classification": "jwt", "cwe": "CWE-347", "test": r.test,
+                          "escalated_to": r.escalated_to,
+                          "tier": "high-confidence" if r.escalated_to else "needs-review",
+                          "forged_token": r.forged_token},
+            ))
+        return findings
 
     # ---- horizontal IDOR / vertical / unauth via side-by-side ----
     def _test_object_access(self, d: dict) -> list[Finding]:
