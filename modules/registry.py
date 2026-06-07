@@ -6,11 +6,13 @@ Adding a new vuln module later (sqli, ssrf, ...) is just one line here.
 
 from __future__ import annotations
 
+from modules.accesscontrol.module import AccessControlModule
 from modules.base import Module
 from modules.xss.module import XssModule
 
 REGISTRY: dict[str, type[Module]] = {
     "xss": XssModule,
+    "accesscontrol": AccessControlModule,
 }
 
 

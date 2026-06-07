@@ -29,6 +29,7 @@ def register(app: typer.Typer) -> None:
         no_dalfox: bool = typer.Option(False, "--no-dalfox", help="Don't invoke dalfox."),
         no_blind: bool = typer.Option(False, "--no-blind", help="Don't inject blind/OOB payloads."),
         record_video: bool = typer.Option(False, "--video", help="Record short PoC videos (slower)."),
+        sweep: bool = typer.Option(False, "--sweep", help="(access-control) authorise a controlled sequential id sweep."),
         db: Path = typer.Option(Path("data/findings.db"), help="SQLite datastore path."),
     ) -> None:
         """Run a vulnerability module across the inventory, fault-tolerantly."""
@@ -48,8 +49,15 @@ def register(app: typer.Typer) -> None:
         kwargs = {}
         if module == "xss":
             kwargs = dict(use_dalfox=not no_dalfox, use_blind=not no_blind, record_video=record_video)
+        elif module == "accesscontrol":
+            kwargs = dict(sweep=sweep)
 
-        mod = module_cls(ctx, **kwargs)
+        try:
+            mod = module_cls(ctx, **kwargs)
+        except BBPlatformError as exc:
+            console.print(f"[red]{exc}[/red]")
+            ctx.close()
+            raise typer.Exit(code=1)
         engine = RunEngine(ctx, mod)
         try:
             stats = engine.run(resume=resume)
@@ -58,6 +66,11 @@ def register(app: typer.Typer) -> None:
                 f"[red]{exc}[/red]\n\nSet [bold]rules.automated_scanning_allowed: true[/bold] "
                 f"in {config} only if the program permits automation."
             )
+            ctx.close()
+            raise typer.Exit(code=2)
+        except BBPlatformError as exc:
+            # e.g. the access-control own-accounts-only gate (need >= 2 identities).
+            console.print(f"[red]{exc}[/red]")
             ctx.close()
             raise typer.Exit(code=2)
 
