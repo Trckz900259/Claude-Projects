@@ -1,0 +1,59 @@
+# ============================================================================
+#  Validation lab — deliberately-vulnerable targets on an ISOLATED network.
+# ----------------------------------------------------------------------------
+#  Safety:
+#    * Every port is bound to 127.0.0.1 ONLY -> never exposed to the internet.
+#    * mock-metadata serves FAKE credentials and is the ONLY metadata endpoint
+#      the SSRF module is pointed at (never a real 169.254.169.254).
+#  Start/stop with:  make lab-up  /  make lab-down  /  make lab-status
+# ============================================================================
+name: bbp-validation-lab
+
+networks:
+  labnet:
+    driver: bridge
+
+services:
+  # --- broad: XSS, IDOR/BOLA, SQLi, auth flaws ---
+  juice-shop:
+    image: bkimminich/juice-shop:latest
+    ports: ["127.0.0.1:3000:3000"]
+    networks: [labnet]
+    restart: unless-stopped
+
+  # --- XSS, SQLi, command injection, LFI, CSRF (selectable security levels) ---
+  dvwa:
+    image: vulnerables/web-dvwa:latest
+    ports: ["127.0.0.1:8081:80"]
+    networks: [labnet]
+    restart: unless-stopped
+
+  # --- GraphQL authorization (DVGA) ---
+  dvga:
+    image: dolevf/dvga:latest
+    environment: { WEB_HOST: "0.0.0.0" }
+    ports: ["127.0.0.1:5013:5013"]
+    networks: [labnet]
+    restart: unless-stopped
+
+  # --- our SSRF lab (SSRF + internal Spring-Actuator mock at :9099) ---
+  ssrf-lab:
+    image: python:3.11-slim
+    working_dir: /app
+    volumes: ["../:/app:ro"]
+    command: >
+      sh -c "pip install --quiet requests && python tests/fixtures/vulnerable_ssrf.py 8300"
+    ports: ["127.0.0.1:8300:8300"]
+    networks: [labnet]
+    restart: unless-stopped
+
+  # --- MOCK metadata server (FAKE creds only) — the SSRF module points here ---
+  mock-metadata:
+    image: python:3.11-slim
+    working_dir: /app
+    volumes: ["../:/app:ro"]
+    command: python lab/mock_metadata.py 8200
+    # Reachable from the lab as http://mock-metadata:8200 (set ssrf.metadata_base).
+    ports: ["127.0.0.1:8200:8200"]
+    networks: [labnet]
+    restart: unless-stopped

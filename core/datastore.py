@@ -236,6 +236,35 @@ CREATE TABLE IF NOT EXISTS id_params (
 CREATE INDEX IF NOT EXISTS idx_traffic_program ON captured_traffic(program_id);
 CREATE INDEX IF NOT EXISTS idx_endpoints_program ON endpoints(program_id);
 CREATE INDEX IF NOT EXISTS idx_idparams_program ON id_params(program_id);
+
+-- ===================================================================
+--  Validation benchmark (Rung 1)
+-- ===================================================================
+-- One row per benchmark run -> the regression/trend history.
+CREATE TABLE IF NOT EXISTS benchmark_runs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_uid     TEXT NOT NULL UNIQUE,
+    profile     TEXT,
+    metrics     TEXT,                    -- JSON: per-module/class precision/recall
+    started_at  TEXT NOT NULL,
+    finished_at TEXT
+);
+
+-- Per-item match outcomes for the latest run (TP/FP/FN/needs_review/...).
+CREATE TABLE IF NOT EXISTS benchmark_results (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    benchmark_run INTEGER REFERENCES benchmark_runs(id),
+    status        TEXT NOT NULL,         -- tp|fp|fn|needs_review|human_puzzle|no_module
+    module        TEXT,
+    target        TEXT,
+    vuln_class    TEXT,
+    location      TEXT,
+    manifest_id   TEXT,
+    finding_id    INTEGER,
+    confidence    REAL,
+    note          TEXT,
+    created_at    TEXT NOT NULL
+);
 """
 
 
@@ -625,6 +654,47 @@ class Datastore:
 
     def get_id_params(self, program_id: int) -> list[sqlite3.Row]:
         return self.query("SELECT * FROM id_params WHERE program_id = ? ORDER BY id", (program_id,))
+
+    # -- validation benchmark ---------------------------------------------
+    def clear_scan_data(self) -> None:
+        """Wipe scan surface + findings (keep programs + benchmark history)."""
+        with self._lock:
+            for t in ("finding_instances", "findings", "urls", "parameters", "assets",
+                      "captured_traffic", "endpoints", "id_params", "callbacks",
+                      "queue_items", "runs"):
+                self._conn.execute(f"DELETE FROM {t}")
+            self._conn.commit()
+
+    def start_benchmark(self, run_uid: str, profile: str) -> int:
+        cur = self._execute(
+            "INSERT INTO benchmark_runs (run_uid, profile, metrics, started_at) VALUES (?,?,?,?)",
+            (run_uid, profile, json.dumps({}), _now()))
+        return int(cur.lastrowid)
+
+    def finish_benchmark(self, run_id: int, metrics: dict) -> None:
+        self._execute("UPDATE benchmark_runs SET metrics = ?, finished_at = ? WHERE id = ?",
+                      (json.dumps(metrics), _now(), run_id))
+
+    def add_benchmark_result(self, benchmark_run: int, status: str, module: str, target: str,
+                             vuln_class: str, location: str, manifest_id: str = "",
+                             finding_id: int | None = None, confidence: float | None = None,
+                             note: str = "") -> None:
+        self._execute(
+            "INSERT INTO benchmark_results (benchmark_run, status, module, target, vuln_class, "
+            "location, manifest_id, finding_id, confidence, note, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (benchmark_run, status, module, target, vuln_class, location, manifest_id,
+             finding_id, confidence, note, _now()))
+
+    def clear_benchmark_results(self) -> None:
+        self._execute("DELETE FROM benchmark_results", ())
+
+    def get_benchmark_runs(self) -> list[sqlite3.Row]:
+        return self.query("SELECT * FROM benchmark_runs ORDER BY id")
+
+    def get_benchmark_results(self, benchmark_run: int) -> list[sqlite3.Row]:
+        return self.query("SELECT * FROM benchmark_results WHERE benchmark_run = ? ORDER BY id",
+                          (benchmark_run,))
 
     def close(self) -> None:
         with self._lock:

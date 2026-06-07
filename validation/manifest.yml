@@ -1,0 +1,108 @@
+# ============================================================================
+#  Ground-truth manifest — the ANSWER KEY for the validation benchmark.
+# ----------------------------------------------------------------------------
+#  Each entry is a KNOWN vulnerability in a lab target. The benchmark matches the
+#  platform's findings against these by (finding_type + subtype + location).
+#
+#  kind:
+#    findable      — a tool SHOULD find this (counts toward recall).
+#    human_puzzle  — needs manual creativity; a miss is acceptable (excluded from
+#                    the false-negative penalty, listed separately).
+#    no_module     — real, but the platform has no module for it yet (excluded
+#                    from the FN penalty; surfaced in the gap log as a tool gap).
+#
+#  Targets named *-lab are the bundled no-Docker fixtures (validated here);
+#  juice-shop / dvwa / dvga are the Dockerised public apps (for `make lab-up`).
+# ============================================================================
+
+entries:
+  # ---------------- XSS fixture (tests/fixtures/vulnerable_app.py) ----------
+  - { id: xss-1, target: xss-lab, finding_type: xss, subtype: reflected,
+      endpoint: /search, param: q, severity: medium, kind: findable, module: xss,
+      note: "Reflected XSS in q (HTML body)." }
+  - { id: xss-2, target: xss-lab, finding_type: xss, subtype: reflected,
+      endpoint: /greet, param: name, severity: medium, kind: findable, module: xss,
+      note: "Reflected XSS in name (attribute context)." }
+  - { id: xss-3, target: xss-lab, finding_type: xss, subtype: reflected,
+      endpoint: /comment, param: text, severity: medium, kind: findable, module: xss,
+      note: "Reflected XSS in text (HTML body)." }
+  - { id: xss-4, target: xss-lab, finding_type: xss, subtype: dom,
+      endpoint: /dom, param: location.hash, severity: medium, kind: findable, module: xss,
+      note: "DOM XSS location.hash -> innerHTML." }
+  - { id: xss-5, target: xss-lab, finding_type: xss, subtype: stored,
+      endpoint: /comment, param: text, severity: high, kind: human_puzzle, module: xss,
+      note: "Truly-stored XSS needs a persistent sink + viewing flow (manual)." }
+
+  # ---------------- Access-control fixture (vulnerable_api.py) --------------
+  - { id: ac-1, target: api-lab, finding_type: accesscontrol, subtype: horizontal,
+      endpoint: /api/users/, param: "", severity: high, kind: findable, module: accesscontrol,
+      note: "IDOR/BOLA on /api/users/{id}." }
+  - { id: ac-2, target: api-lab, finding_type: accesscontrol, subtype: horizontal,
+      endpoint: /api/users/, param: orders, severity: medium, kind: findable, module: accesscontrol,
+      note: "Nested IDOR on /api/users/{id}/orders." }
+  - { id: ac-3, target: api-lab, finding_type: accesscontrol, subtype: vertical,
+      endpoint: /admin/stats, param: "", severity: high, kind: findable, module: accesscontrol,
+      note: "BFLA: any user reaches admin stats." }
+  - { id: ac-4, target: api-lab, finding_type: accesscontrol, subtype: object_property,
+      endpoint: /api/profile, param: "", severity: high, kind: findable, module: accesscontrol,
+      note: "BOPLA / mass assignment (role)." }
+  - { id: ac-5, target: api-lab, finding_type: accesscontrol, subtype: jwt,
+      endpoint: /api/me, param: alg_none, severity: high, kind: findable, module: accesscontrol,
+      note: "JWT alg:none accepted." }
+  - { id: ac-6, target: api-lab, finding_type: accesscontrol, subtype: jwt,
+      endpoint: /api/me, param: weak_secret, severity: high, kind: findable, module: accesscontrol,
+      note: "JWT weak HS256 secret." }
+  - { id: ac-7, target: api-lab, finding_type: accesscontrol, subtype: "403bypass",
+      endpoint: /admin/secret, param: "", severity: high, kind: findable, module: accesscontrol,
+      note: "403 bypass via header/path." }
+  - { id: ac-8, target: api-lab, finding_type: accesscontrol, subtype: graphql,
+      endpoint: /graphql, param: bola, severity: high, kind: findable, module: accesscontrol,
+      note: "GraphQL BOLA on user(id)." }
+  - { id: ac-9, target: api-lab, finding_type: accesscontrol, subtype: race,
+      endpoint: /api/redeem, param: "", severity: medium, kind: findable, module: accesscontrol,
+      note: "Race / coupon over-redemption." }
+
+  # ---------------- SSRF fixture (vulnerable_ssrf.py) -----------------------
+  - { id: ssrf-1, target: ssrf-lab, finding_type: ssrf, subtype: ssrf,
+      endpoint: /fetch, param: url, severity: high, kind: findable, module: ssrf,
+      note: "Full SSRF (response reflected)." }
+  - { id: ssrf-2, target: ssrf-lab, finding_type: ssrf, subtype: blind-ssrf,
+      endpoint: /webhook, param: url, severity: medium, kind: findable, module: ssrf,
+      note: "Blind SSRF (webhook)." }
+  - { id: ssrf-3, target: ssrf-lab, finding_type: ssrf, subtype: cloud-metadata,
+      endpoint: /fetch, param: url, severity: critical, kind: findable, module: ssrf,
+      note: "Cloud metadata exposure via SSRF (mock IMDS)." }
+  - { id: ssrf-4, target: ssrf-lab, finding_type: ssrf, subtype: cloud-metadata,
+      endpoint: /fetch-safe, param: url, severity: critical, kind: findable, module: ssrf,
+      note: "Cloud metadata via SSRF with filter bypass." }
+  - { id: ssrf-5, target: ssrf-lab, finding_type: ssrf, subtype: internal-service,
+      endpoint: /fetch, param: url, severity: high, kind: findable, module: ssrf,
+      note: "Internal Spring Actuator reachable via SSRF (heapdump secrets)." }
+  - { id: ssrf-6, target: ssrf-lab, finding_type: ssrf, subtype: ssrf,
+      endpoint: /webhook, param: url, severity: high, kind: human_puzzle, module: ssrf,
+      note: "Second-order SSRF (input stored, fetched later by a job) — manual setup." }
+
+  # ---------------- No-module gaps (real bugs, no module yet) ---------------
+  - { id: gap-sqli, target: api-lab, finding_type: sqli, subtype: "",
+      endpoint: /api/users/, param: id, severity: high, kind: no_module, module: "",
+      note: "SQL injection — the platform has no SQLi module yet." }
+
+  # ---------------- Dockerised public apps (for `make lab-up`) -------------
+  - { id: js-xss, target: juice-shop, finding_type: xss, subtype: reflected,
+      endpoint: /rest/products/search, param: q, severity: medium, kind: findable, module: xss,
+      note: "Juice Shop reflected XSS in search q." }
+  - { id: js-idor-basket, target: juice-shop, finding_type: accesscontrol, subtype: horizontal,
+      endpoint: /rest/basket/, param: "", severity: high, kind: findable, module: accesscontrol,
+      note: "Juice Shop basket IDOR (BOLA)." }
+  - { id: js-sqli-login, target: juice-shop, finding_type: sqli, subtype: "",
+      endpoint: /rest/user/login, param: email, severity: critical, kind: no_module, module: "",
+      note: "Juice Shop SQLi login bypass — no SQLi module." }
+  - { id: dvwa-xss-r, target: dvwa, finding_type: xss, subtype: reflected,
+      endpoint: /vulnerabilities/xss_r/, param: name, severity: medium, kind: findable, module: xss,
+      note: "DVWA reflected XSS (security=low)." }
+  - { id: dvwa-sqli, target: dvwa, finding_type: sqli, subtype: "",
+      endpoint: /vulnerabilities/sqli/, param: id, severity: high, kind: no_module, module: "",
+      note: "DVWA SQLi — no SQLi module." }
+  - { id: dvga-bola, target: dvga, finding_type: accesscontrol, subtype: graphql,
+      endpoint: /graphql, param: bola, severity: high, kind: findable, module: accesscontrol,
+      note: "DVGA GraphQL authorization (BOLA)." }

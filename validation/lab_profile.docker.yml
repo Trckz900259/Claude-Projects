@@ -1,0 +1,21 @@
+# Docker-lab benchmark profile (for `make lab-up` on your machine).
+# The ssrf-lab is validated automatically; the public apps (juice-shop/dvwa/dvga)
+# need a per-target config (scope = the localhost port) and, for IDOR/GraphQL,
+# two registered test accounts in a gitignored identities file. See lab/README.md.
+profile: docker-lab
+targets:
+  - name: ssrf-lab
+    config: config/local-ssrf.yml
+    module: ssrf
+    base_url: http://127.0.0.1:8300
+    seed: ssrf
+    # Point cloud-metadata at the MOCK server (never a real IMDS):
+    overrides: { ssrf: { metadata_base: "mock-metadata:8200" } }
+
+  # Fill these in once the public apps are up and accounts/configs are prepared:
+  # - { name: juice-shop, config: config/juice-shop-docker.yml, module: xss,
+  #     base_url: http://127.0.0.1:3000/, seed: recon }
+  # - { name: juice-shop, config: config/juice-shop-docker.yml, module: accesscontrol,
+  #     base_url: http://127.0.0.1:3000, seed: accesscontrol }
+  # - { name: dvga, config: config/dvga-docker.yml, module: accesscontrol,
+  #     base_url: http://127.0.0.1:5013, seed: accesscontrol }

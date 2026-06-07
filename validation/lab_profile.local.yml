@@ -1,0 +1,25 @@
+# Local benchmark profile — the bundled no-Docker fixture apps (validated here).
+# Start them first:
+#   python tests/fixtures/vulnerable_app.py 8000
+#   python tests/fixtures/vulnerable_api.py 8100
+#   python tests/fixtures/vulnerable_ssrf.py 8300
+profile: local-fixtures
+targets:
+  - name: xss-lab
+    config: config/juice-shop.yml          # localhost scope, automated scanning on
+    module: xss
+    base_url: http://127.0.0.1:8000/
+    seed: recon
+    kwargs: { use_dalfox: false, use_blind: false }
+
+  - name: api-lab
+    config: config/local-api.yml
+    module: accesscontrol
+    base_url: http://127.0.0.1:8100
+    seed: accesscontrol
+
+  - name: ssrf-lab
+    config: config/local-ssrf.yml
+    module: ssrf
+    base_url: http://127.0.0.1:8300
+    seed: ssrf

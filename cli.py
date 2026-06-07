@@ -170,6 +170,12 @@ def _register_later_stages() -> None:
         register_dashboard(app)
     except Exception:
         pass
+    try:
+        from validation.cli import register as register_validation
+
+        register_validation(app)
+    except Exception:
+        pass
 
 
 @app.callback()

@@ -287,10 +287,11 @@ class AccessControlModule(Module):
         from modules.accesscontrol.graphql_tester import GraphQLTester
 
         findings: list[Finding] = []
-        for r in GraphQLTester(self.sm, logger=self.log).test(d["base_url"]):
+        tester = GraphQLTester(self.sm, logger=self.log)
+        for r in tester.test(d["base_url"]):
             findings.append(Finding(
                 type="accesscontrol", subtype="graphql", severity=r.severity, status="new",
-                url=d["base_url"], parameter=r.kind, context="graphql",
+                url=tester.endpoint or d["base_url"], parameter=r.kind, context="graphql",
                 payload=r.request, request=r.request, response=r.response,
                 title=r.title, description=r.detail,
                 evidence={**r.evidence, "classification": "graphql", "graphql_kind": r.kind,

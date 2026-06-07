@@ -41,6 +41,7 @@ packages = [
     "report",
     "dashboard",
     "orchestrator",
+    "validation",
 ]
 py-modules = ["cli"]
 

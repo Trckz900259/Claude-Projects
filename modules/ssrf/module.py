@@ -58,6 +58,9 @@ class SsrfModule(Module):
         # Internal hosts to probe once SSRF is confirmed (lab default: localhost).
         raw = (ctx.config.raw.get("ssrf", {}) or {})
         self.internal_targets = internal_targets or raw.get("internal_targets", ["127.0.0.1"])
+        # Point cloud-metadata tests at a MOCK server (lab safety): if set, the
+        # real 169.254.169.254 host in the matrix is rewritten to this address.
+        self.metadata_base = raw.get("metadata_base", "")
         self.collab = None
 
     # -- program-rule surfacing -------------------------------------------
@@ -210,10 +213,17 @@ class SsrfModule(Module):
     def _looks_blocked(self, resp) -> bool:
         return resp.status_code in (400, 403) or "block" in (resp.text or "").lower()
 
+    def _meta_url(self, url: str) -> str:
+        """Rewrite the metadata host to the mock server when configured (lab safety)."""
+        if self.metadata_base:
+            return url.replace("169.254.169.254", self.metadata_base).replace(
+                "metadata.google.internal", self.metadata_base)
+        return url
+
     def _test_metadata(self, d: dict) -> list[Finding]:
         findings: list[Finding] = []
         for entry in CLOUD_METADATA:
-            resp = self._fetch_with(d["url"], d["param"], d["location"], entry["url"])
+            resp = self._fetch_with(d["url"], d["param"], d["location"], self._meta_url(entry["url"]))
             body = resp.text or ""
             markers = self._metadata_markers(entry, body)
             used_bypass = ""

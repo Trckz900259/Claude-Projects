@@ -45,6 +45,7 @@ class GraphQLTester:
     def __init__(self, session_manager, logger: logging.Logger | None = None) -> None:
         self.sm = session_manager
         self.log = logger or logging.getLogger("ac.graphql")
+        self.endpoint = ""   # the discovered GraphQL URL (for findings/reports)
 
     def _query(self, identity: str, url: str, query: str):
         res = self.sm.request_as(identity, "POST", url, json={"query": query},
@@ -71,6 +72,7 @@ class GraphQLTester:
         url = self.discover(base_url)
         if not url:
             return []
+        self.endpoint = url
         findings: list[GraphQLFinding] = []
 
         # 2) introspection

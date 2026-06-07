@@ -266,7 +266,33 @@ bbp scan config/myprogram.yml --module ssrf --interactsh   # real targets (OOB)
 Validated against a bundled SSRF lab (`tests/fixtures/vulnerable_ssrf.py`): full
 SSRF (OOB callback), blind SSRF, cloud-metadata exposure (direct **and** via a
 decimal-IP filter bypass, possession-proof only), and internal Spring Actuator
-with heapdump secrets scanned. CWE-918. **103 tests pass.**
+with heapdump secrets scanned. CWE-918.
+
+### Rung 1 — Validation lab & feedback loop ✅
+
+A self-validating benchmark: stand up deliberately-vulnerable targets, measure
+each module against a **ground-truth manifest**, and track precision/recall and
+regression — so you can trust the platform before pointing it at real targets.
+
+- `lab/` — Docker Compose lab (Juice Shop, DVWA, DVGA, SSRF app, **mock IMDS**
+  with fake creds) on an isolated, localhost-only network (`make lab-up/down`).
+- `validation/` — the ground-truth manifest, a benchmark **runner**, a
+  threshold-parameterised **scorer** (TP/FP/FN, precision/recall, respecting the
+  platform's confidence tiers), a **gap log** (fixable-tool-gap vs manual), and
+  **threshold-tuning** recommendations.
+- Dashboard **Validation** view: per-module precision/recall, a regression trend
+  across runs, and the gap log.
+
+```bash
+bbp benchmark validation/lab_profile.local.yml      # against the bundled fixtures
+bbp dashboard --db data/benchmark.db                # -> the Validation tab
+```
+
+**Baseline:** XSS 100%/100%, SSRF 100%/100%, Access-Control 100% precision /
+56% recall at the default 0.7 cutoff — and the tuner correctly recommends a 0.4
+cutoff for AC (it's deliberately conservative, surfacing for review). **112 tests
+pass.** The benchmark immediately caught two real harness/wiring issues, which is
+exactly its job.
 
 See `USER_MANUAL.md` (added in Stage 4) for a plain-English walkthrough of every
 pipeline stage, a glossary, and troubleshooting.

@@ -93,8 +93,9 @@ callbacks = df(conn, "SELECT * FROM callbacks WHERE program_id = ? ORDER BY rece
 runs = df(conn, "SELECT * FROM runs WHERE program_id = ? ORDER BY id DESC", (pid,))
 identities = df(conn, "SELECT * FROM identities WHERE program_id = ? ORDER BY id", (pid,))
 
-tab_over, tab_find, tab_recon, tab_ident, tab_cb, tab_charts = st.tabs(
-    ["Overview", "Findings", "Recon & coverage", "Identities", "Blind callbacks", "Charts"]
+tab_over, tab_find, tab_recon, tab_ident, tab_cb, tab_charts, tab_valid = st.tabs(
+    ["Overview", "Findings", "Recon & coverage", "Identities", "Blind callbacks",
+     "Charts", "Validation"]
 )
 
 # ---------------------------------------------------------------------------
@@ -305,3 +306,74 @@ with tab_charts:
                 fig2 = px.line(ts, x="created_at", y="cumulative",
                                title="Findings over time (cumulative)", markers=True)
                 st.plotly_chart(fig2, use_container_width=True)
+
+
+# ---------------------------------------------------------------------------
+# Validation (benchmark precision/recall, regression trend, gap log)
+# ---------------------------------------------------------------------------
+with tab_valid:
+    st.subheader("Module validation (benchmark vs. ground truth)")
+    st.caption("Point the dashboard at the benchmark DB to see this: "
+               "`bbp dashboard --db data/benchmark.db`. Runs: `bbp benchmark`.")
+    bruns = df(conn, "SELECT * FROM benchmark_runs ORDER BY id")
+    if bruns.empty:
+        st.info("No benchmark runs yet. Run `bbp benchmark validation/lab_profile.local.yml`.")
+    else:
+        latest = bruns.iloc[-1]
+        try:
+            metrics = json.loads(latest["metrics"] or "{}")
+        except Exception:
+            metrics = {}
+        by_module = metrics.get("by_module", {})
+
+        st.markdown(f"**Latest run** `{latest['run_uid']}` · {len(bruns)} run(s) in history")
+        rows = []
+        recs = {r["module"]: r for r in metrics.get("threshold_recs", [])}
+        for mod, m in sorted(by_module.items()):
+            if mod in ("?", "", "sqli"):
+                continue
+            rec = recs.get(mod, {})
+            rows.append({"module": mod, "TP": m.get("tp"), "FP": m.get("fp"),
+                         "FN": m.get("fn", 0) + m.get("surfaced_low", 0),
+                         "precision": m.get("precision"), "recall": m.get("recall"),
+                         "rec. threshold": rec.get("recommended")})
+        if rows:
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+        # Regression trend across runs (precision & recall per module).
+        st.subheader("Regression trend")
+        trend = []
+        for _, r in bruns.iterrows():
+            try:
+                mm = json.loads(r["metrics"] or "{}").get("by_module", {})
+            except Exception:
+                mm = {}
+            for mod, m in mm.items():
+                if mod in ("?", "", "sqli"):
+                    continue
+                if m.get("precision") is not None:
+                    trend.append({"run": int(r["id"]), "module": mod,
+                                  "precision": m.get("precision"), "recall": m.get("recall")})
+        if trend:
+            tdf = pd.DataFrame(trend)
+            c1, c2 = st.columns(2)
+            with c1:
+                st.plotly_chart(px.line(tdf, x="run", y="precision", color="module",
+                                        markers=True, title="Precision over runs", range_y=[0, 1.05]),
+                                use_container_width=True)
+            with c2:
+                st.plotly_chart(px.line(tdf, x="run", y="recall", color="module",
+                                        markers=True, title="Recall over runs", range_y=[0, 1.05]),
+                                use_container_width=True)
+
+        # Gap log (latest run).
+        st.subheader("Gap log (module-improvement backlog)")
+        gl = df(conn,
+                "SELECT status, module, target, vuln_class, location, note FROM benchmark_results "
+                "WHERE benchmark_run = ? AND status IN "
+                "('fn','surfaced_low','no_module','human_puzzle') ORDER BY status",
+                (int(latest["id"]),))
+        if gl.empty:
+            st.success("No gaps in the latest run.")
+        else:
+            st.dataframe(gl, use_container_width=True, hide_index=True)
