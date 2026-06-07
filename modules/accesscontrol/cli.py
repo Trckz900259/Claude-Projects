@@ -101,6 +101,46 @@ def register(app: typer.Typer) -> None:
         finally:
             ctx.close()
 
+    @app.command()
+    def discover(
+        config: Path = typer.Argument(..., help="Program profile."),
+        openapi: Path = typer.Option(None, "--openapi", help="OpenAPI/Swagger file to ingest."),
+        postman: Path = typer.Option(None, "--postman", help="Postman collection to ingest."),
+        db: Path = typer.Option(Path("data/findings.db")),
+    ) -> None:
+        """Catalogue endpoints (recon + spec + traffic) and identify ID parameters."""
+        try:
+            ctx = PlatformContext.from_config_path(config, db_path=db)
+        except BBPlatformError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1)
+        from modules.accesscontrol.idparams import IdParamIdentifier
+        from modules.accesscontrol.sourcing import discover_endpoints
+
+        counts = discover_endpoints(
+            ctx, openapi=str(openapi) if openapi else None,
+            postman=str(postman) if postman else None,
+        )
+        n_id = IdParamIdentifier(ctx).run()
+
+        t1 = Table(title="Endpoint feeds")
+        t1.add_column("Feed"); t1.add_column("Endpoints", justify="right")
+        for feed, n in counts.items():
+            t1.add_row(feed, str(n))
+        console.print(t1)
+
+        idrows = ctx.datastore.get_id_params(ctx.program_id)
+        t2 = Table(title=f"ID parameters identified ({len(idrows)})")
+        for col in ("Name", "Location", "Class", "Endpoint", "Example"):
+            t2.add_column(col)
+        for r in idrows[:40]:
+            t2.add_row(r["name"], r["location"], r["id_class"],
+                       (r["endpoint"] or "")[:40], (r["example_value"] or "")[:24])
+        console.print(t2)
+        console.print(f"\n[green]Discovery complete[/green]: {sum(counts.values())} endpoint records, "
+                      f"{n_id} ID-parameter location(s).")
+        ctx.close()
+
     @app.command("harvest-tokens")
     def harvest_tokens(
         config: Path = typer.Argument(..., help="Program profile."),

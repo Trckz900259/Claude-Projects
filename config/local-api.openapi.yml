@@ -1,0 +1,20 @@
+# Sample OpenAPI spec for the local vulnerable API (demonstrates the spec feed).
+openapi: "3.0.0"
+info: { title: "Local Vulnerable API", version: "1.0" }
+servers:
+  - url: "http://127.0.0.1:8100"
+paths:
+  /api/users/{id}:
+    get:
+      summary: "Get a user by id"
+      parameters:
+        - { name: id, in: path, required: true }
+  /api/users/{id}/orders:
+    get:
+      summary: "Get a user's orders"
+      parameters:
+        - { name: id, in: path, required: true }
+  /admin/stats:
+    get: { summary: "Admin statistics" }
+  /api/profile:
+    post: { summary: "Update own profile" }
