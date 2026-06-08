@@ -1,104 +1,118 @@
-# bb-worker (starter image)
+# bb-worker
 
-A minimal, **ephemeral scan-worker** container with a *starter* set of security
-tools, every version explicitly **pinned** so our validation baseline stays
-stable. We'll expand the toolset once this builds clean.
+The **ephemeral scan-worker** container: a disposable image with the full set of
+security tools the platform's modules wrap, **every version explicitly pinned**
+(and the base image pinned by digest) so our validation baseline is reproducible.
 
-| Tool | Kind | Pinned version |
-|---|---|---|
-| subfinder | Go | v2.14.0 |
-| httpx | Go | v1.9.0 |
-| nuclei | Go | v3.8.0 |
-| dalfox | Go | v2.13.0 |
-| arjun | Python | 2.2.7 |
-| sqlmap | Python | 1.10.6 |
-| (Go toolchain) | — | 1.25.11 |
-| (base image) | — | debian:bookworm-slim (Python 3.11) |
+**Not in this image** (these are persistent **control-plane** services, run
+separately): the interactsh callback **server**, and the DNS-rebinding service
+(Singularity / rbndr). The interactsh **client** *is* included.
 
-## Build & verify (on your Windows + Docker Desktop / WSL 2 machine)
+## Pinned toolset
 
-Open a terminal in the repo root and run:
+| Category | Tool | Pin | Install |
+|---|---|---|---|
+| Recon | subfinder | v2.14.0 | go |
+| Recon | httpx | v1.9.0 | go |
+| Recon | katana | v1.6.1 | go |
+| Recon | gau | v2.2.4 | go |
+| Recon | waybackurls | v0.1.0 | go |
+| Recon | gf (+ Gf-Patterns) | `dcd4c361` / patterns `f686f06a` | go / git |
+| Recon | kxss | `acb2dc76` | go |
+| Recon | ffuf | v2.1.0 | go |
+| Recon | nuclei | v3.8.0 | go |
+| XSS | dalfox | v2.13.0 | go |
+| Access control | jwt_tool | v2.3.0 | git (venv) |
+| Access control | nomore403 | v1.4.0 | go |
+| GraphQL | clairvoyance | 2.5.5 | pip |
+| GraphQL | graphql-cop | 1.16 | git (venv) |
+| SSRF | SSRFmap | `69103b27` | git (venv) |
+| SSRF | Gopherus | `90a2fd57` | git — **Python 2 only** (see notes) |
+| SSRF | ipfuscator | `6d24eb03` | git (venv) |
+| SSRF/OOB | interactsh-client | v1.3.1 | go |
+| Python lib | fuzz-lightyear | 0.0.11 | pip |
+| Python | arjun | 2.2.7 | pip |
+| Python | sqlmap | 1.10.6 | pip |
+| Toolchain | Go | **1.25.11** | tarball + checksum |
+| Base image | debian:bookworm-slim | `@sha256:0104b334…` (multi-arch index) | — |
+
+## Build & verify (Windows + Docker Desktop / WSL 2)
 
 ```powershell
-# 1) Build the image (first build downloads Go + compiles the tools; ~3–6 min)
-docker build -t bb-worker:test ./worker
-
-# 2) Verify: run the container — its entrypoint prints every tool's version
-docker run --rm bb-worker:test
+docker build -t bb-worker:test ./worker      # first build ~5–10 min (compiles Go tools)
+docker run --rm bb-worker:test               # entrypoint prints EVERY tool's version
 ```
 
-### Expected output of step 2
+`verify.sh` checks each tool the right way — `-version` / `--version` / a
+`version` subcommand / presence-only for stdin tools (gf, kxss, waybackurls) /
+package metadata (arjun, fuzz-lightyear) — and exits `0` on full pass. The tail
+of a good run looks like:
 
 ```
-==================================================================
-  bb-worker :: tool verification  (....Z)
-==================================================================
-Runtime:
-  OS         Debian GNU/Linux 12 (bookworm)
-  Python     Python 3.11.x
-  Go         go1.25.11
-------------------------------------------------------------------
-Go-based tools:
-  subfinder  pinned v2.14.0   : OK    runs -> v2.14.0
-  httpx      pinned v1.9.0    : OK    runs -> v1.9.0
-  nuclei     pinned v3.8.0    : OK    runs -> v3.8.0
-  dalfox     pinned v2.13.0   : OK    runs -> v2.13.0
-------------------------------------------------------------------
-Python-based tools:
-  sqlmap     pinned 1.10.6    : OK    runs -> 1.10.6#pip
-  arjun      pinned 2.2.7     : OK    runs -> 2.2.7
-------------------------------------------------------------------
-  RESULT: ALL 6 TOOLS PRESENT AND RUNNABLE  [PASS]
-------------------------------------------------------------------
+  RESULT: ALL TOOLS PRESENT AND RUNNABLE  [PASS]
 ```
-
-(`verify.sh` exits `0` on full pass, or the number of failed tools — handy for CI.)
 
 ## How the pinning works
 
-- **Go tools** are pinned to exact git tags via `go install …@vX.Y.Z`.
-- **Python tools** are pinned to exact PyPI versions via `pip install pkg==X.Y.Z`.
-- **The Go toolchain** is pinned and downloaded with a checksum check, and
-  `GOTOOLCHAIN=local` stops Go from silently swapping in a newer, unpinned Go.
-- To **bump a tool**, edit one line in the `ENV …_VERSION=` block in the
-  `Dockerfile` and rebuild.
+- **Go tools** → `go install …@<exact tag/commit>`. `GOTOOLCHAIN=local` forces
+  the build to use exactly **Go 1.25.11** and FAIL LOUDLY if a tool ever needs
+  newer (so we bump the Go pin on purpose, never silently).
+- **PyPI tools** → `pip install pkg==<version>` (into system Python; Debian's
+  PEP-668 lock is handled with `--break-system-packages`).
+- **Git tools** (jwt_tool, SSRFmap, graphql-cop, ipfuscator) → cloned at an exact
+  tag/commit, each in its **own venv** with a tiny PATH wrapper, because they ship
+  as scripts with *conflicting* dependency pins and would otherwise clobber each
+  other.
+- **Base image** → pinned by **multi-arch manifest digest** (not the moving
+  `bookworm-slim` tag).
 
-### (Optional) pin the base image by digest — the gold standard
+## Re-pinning the base image (do this DELIBERATELY, on a cadence)
 
-Tags like `bookworm-slim` move over time. For a fully reproducible baseline, pin
-the **digest** instead. Get it after a pull:
+The base is currently frozen to:
 
-```bash
-docker pull debian:bookworm-slim
-docker inspect --format='{{index .RepoDigests 0}}' debian:bookworm-slim
+```
+FROM debian:bookworm-slim@sha256:0104b334637a5f19aa9c983a91b54c89887c0984081f2068983107a6f6c21eeb
+# Go toolchain pinned: 1.25.11
 ```
 
-…then replace `FROM debian:bookworm-slim` with
-`FROM debian:bookworm-slim@sha256:<digest>`.
-(At the time of writing the digest resolved to
-`sha256:0104b334637a5f19aa9c983a91b54c89887c0984081f2068983107a6f6c21eeb`.)
+A pinned digest is great for reproducibility — but it also **freezes the base
+image's security updates**. Debian re-publishes `bookworm-slim` with patched
+packages regularly; our pin keeps using the old layers until we move it. So
+re-pinning to a fresh, patched digest is a **deliberate maintenance step**, not
+something to silently automate. Do it on a **cadence (e.g. monthly)**, and
+**whenever you bump tool versions**, so the security baseline and the tool
+baseline move together and intentionally.
 
-## Troubleshooting notes (what came up while building this)
+To re-pin, resolve the **current multi-arch index digest** and replace the `FROM`:
 
-1. **Go version too old → silent toolchain switch.** httpx and nuclei require
-   **Go ≥ 1.25.7** (dalfox ≥ 1.25.5), from their `go.mod`. An older pinned Go
-   (e.g. 1.24.7) makes `go install` quietly auto-download a newer, *unpinned*
-   toolchain — defeating the whole point of pinning. Fix: pin **Go 1.25.11** and
-   set `GOTOOLCHAIN=local` so the build fails loudly if a tool ever needs newer.
+```bash
+docker buildx imagetools inspect debian:bookworm-slim --format '{{.Manifest.Digest}}'
+# -> sha256:<new digest>   (verify MediaType is .index.v1+json = multi-arch)
+```
 
-2. **PEP 668 "externally managed environment."** Debian bookworm blocks plain
-   `pip install` into the system Python. In a single-purpose container it's fine
-   to use `--break-system-packages` (what the Dockerfile does). The stricter
-   alternative is a venv: `python3 -m venv /opt/venv` then install into it and
-   add `/opt/venv/bin` to `PATH`.
+Then rebuild and run `verify.sh` again to confirm every tool still passes before
+adopting the new baseline.
 
-3. **Version flags are inconsistent.** `dalfox` uses the `version` *subcommand*
-   (not `-version`); `arjun` has **no** version flag at all (we read its version
-   from package metadata); the rest use `-version` / `--version`.
+## Troubleshooting notes (things that came up building this)
 
-4. **Why it wasn't built in the cloud dev environment.** That environment's
-   network policy allows PyPI/GitHub/the Go proxy but **blocks the Docker Hub
-   registry CDN**, so base images can't be pulled there. Instead, every pinned
-   tool was installed and run natively (the same `go install …@ver` /
-   `pip install …==ver` commands the Dockerfile uses) to prove all six work — the
-   `[PASS]` output above is real. Your local Docker Desktop has no such block.
+1. **Go version (the big one).** httpx, nuclei, and **katana** need **Go ≥
+   1.25.7** (from their `go.mod`). We pinned **Go 1.25.11** and set
+   `GOTOOLCHAIN=local`; with an older Go, `go install` would *silently
+   auto-download* a newer, unpinned toolchain — defeating the pinning. None of
+   the added tools require newer than 1.25.11, so the Go pin held.
+2. **`nomore403` reports `dev`.** Installed via `go install`, its version isn't
+   stamped in (that happens via release-time ldflags), so `nomore403 --version`
+   prints `dev`. The *source pin* is still `v1.4.0` — it just doesn't self-report.
+3. **Gopherus is Python 2 only (EOL).** We clone it pinned for reference but do
+   **not** add a Python 2 runtime (keeps the worker lean), and the platform's
+   SSRF module generates gopher payloads natively anyway. Its wrapper prints a
+   clear message; if you truly need the standalone tool, install `python2`.
+4. **PEP-668 / conflicting deps.** System Python uses `--break-system-packages`;
+   the git tools each get an isolated venv so their conflicting requirement pins
+   (e.g. different `requests` versions) don't fight.
+5. **Why it wasn't fully built in the cloud dev env.** That sandbox blocks the
+   Docker Hub registry CDN, so base-image *layers* can't be pulled there (the
+   `FROM` digest still *resolves*). Every pinned tool was instead installed and
+   run natively with the exact `go install …@ver` / `pip install …==ver` / git
+   clone commands the Dockerfile uses — the `[PASS]` is real. Your local Docker
+   Desktop has no such block and builds the whole image.
