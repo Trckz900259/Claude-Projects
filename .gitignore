@@ -28,7 +28,15 @@ data/reports/
 # Local secrets / overrides
 config/*.local.yml
 config/secrets.yml
+config/secrets.local.yml
 .env
+
+# Governance backbone state (never commit: keys, audit chain, usage, budgets)
+data/.data_key
+data/audit.db
+data/audit.db-wal
+data/audit.db-shm
+data/usage.json
 
 # ---- OS / editor noise ----
 .DS_Store

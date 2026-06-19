@@ -265,6 +265,58 @@ CREATE TABLE IF NOT EXISTS benchmark_results (
     note          TEXT,
     created_at    TEXT NOT NULL
 );
+
+-- ===================================================================
+--  Safety & governance backbone (Phase 1)
+-- ===================================================================
+-- Cross-process governance flags (kill-switch, dry-run, global halt). The
+-- supervisor + dashboard share this; the gateway reads it before every action.
+CREATE TABLE IF NOT EXISTS gov_state (
+    key        TEXT PRIMARY KEY,
+    value      TEXT,
+    updated_at TEXT
+);
+
+-- Circuit breakers: per-target anomaly counters that auto-halt when tripped.
+CREATE TABLE IF NOT EXISTS circuit_breakers (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    program_id INTEGER,
+    target     TEXT NOT NULL,
+    kind       TEXT NOT NULL,            -- 5xx | error_rate | scope_near_miss | blast_radius
+    count      INTEGER DEFAULT 0,
+    threshold  INTEGER,
+    tripped    INTEGER DEFAULT 0,
+    reason     TEXT,
+    updated_at TEXT,
+    UNIQUE(program_id, target, kind)
+);
+
+-- Human-in-the-loop approval queue.
+CREATE TABLE IF NOT EXISTS approvals (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    program_id INTEGER,
+    actor      TEXT,
+    kind       TEXT,                     -- http | tool | report
+    target     TEXT,
+    summary    TEXT,
+    impact     TEXT,
+    params     TEXT,                     -- JSON (redacted)
+    status     TEXT NOT NULL DEFAULT 'pending',  -- pending|approved|denied|expired
+    created_at TEXT NOT NULL,
+    decided_at TEXT,
+    decided_by TEXT
+);
+
+-- Quarantined adversarial content (prompt-injection attempts in target data).
+CREATE TABLE IF NOT EXISTS injection_quarantine (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    program_id INTEGER,
+    source     TEXT,                     -- where the content came from (url/header/body)
+    severity   TEXT,
+    patterns   TEXT,                     -- JSON list of matched patterns
+    snippet    TEXT,                     -- redacted excerpt
+    created_at TEXT NOT NULL
+);
 """
 
 
@@ -695,6 +747,92 @@ class Datastore:
     def get_benchmark_results(self, benchmark_run: int) -> list[sqlite3.Row]:
         return self.query("SELECT * FROM benchmark_results WHERE benchmark_run = ? ORDER BY id",
                           (benchmark_run,))
+
+    # -- governance backbone ----------------------------------------------
+    def execute(self, sql: str, params: Iterable[Any] = ()) -> sqlite3.Cursor:
+        """Public execute (used by retention/governance helpers)."""
+        return self._execute(sql, params)
+
+    def gov_get(self, key: str, default: str = "") -> str:
+        row = self.query_one("SELECT value FROM gov_state WHERE key = ?", (key,))
+        return row["value"] if row else default
+
+    def gov_set(self, key: str, value: str) -> None:
+        self._execute(
+            "INSERT INTO gov_state (key, value, updated_at) VALUES (?,?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+            (key, value, _now()))
+
+    def breaker_bump(self, program_id: int, target: str, kind: str, threshold: int,
+                     reason: str = "") -> tuple[int, bool]:
+        """Increment a circuit-breaker counter; trip it when it reaches threshold."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT id, count, tripped FROM circuit_breakers "
+                "WHERE program_id=? AND target=? AND kind=?", (program_id, target, kind)).fetchone()
+            if row:
+                count = int(row["count"]) + 1
+                tripped = 1 if count >= threshold else int(row["tripped"])
+                self._conn.execute(
+                    "UPDATE circuit_breakers SET count=?, tripped=?, threshold=?, reason=?, updated_at=? WHERE id=?",
+                    (count, tripped, threshold, reason, _now(), row["id"]))
+            else:
+                count = 1
+                tripped = 1 if count >= threshold else 0
+                self._conn.execute(
+                    "INSERT INTO circuit_breakers (program_id, target, kind, count, threshold, tripped, reason, updated_at) "
+                    "VALUES (?,?,?,?,?,?,?,?)",
+                    (program_id, target, kind, count, threshold, tripped, reason, _now()))
+            self._conn.commit()
+            return count, bool(tripped)
+
+    def breaker_tripped(self, program_id: int, target: str) -> sqlite3.Row | None:
+        return self.query_one(
+            "SELECT * FROM circuit_breakers WHERE program_id=? AND target=? AND tripped=1 LIMIT 1",
+            (program_id, target))
+
+    def breakers(self, program_id: int) -> list[sqlite3.Row]:
+        return self.query("SELECT * FROM circuit_breakers WHERE program_id=? ORDER BY id", (program_id,))
+
+    def reset_breakers(self, program_id: int) -> None:
+        self._execute("DELETE FROM circuit_breakers WHERE program_id=?", (program_id,))
+
+    def add_approval(self, program_id: int, actor: str, kind: str, target: str,
+                     summary: str, impact: str, params: dict) -> int:
+        cur = self._execute(
+            "INSERT INTO approvals (program_id, actor, kind, target, summary, impact, params, status, created_at) "
+            "VALUES (?,?,?,?,?,?,?, 'pending', ?)",
+            (program_id, actor, kind, target, summary, impact, json.dumps(params or {}), _now()))
+        return int(cur.lastrowid)
+
+    def get_approval(self, approval_id: int) -> sqlite3.Row | None:
+        return self.query_one("SELECT * FROM approvals WHERE id=?", (approval_id,))
+
+    def get_approvals(self, program_id: int | None = None, status: str | None = None) -> list[sqlite3.Row]:
+        sql, p = "SELECT * FROM approvals WHERE 1=1", []
+        if program_id is not None:
+            sql += " AND program_id=?"; p.append(program_id)
+        if status:
+            sql += " AND status=?"; p.append(status)
+        return self.query(sql + " ORDER BY id DESC", p)
+
+    def decide_approval(self, approval_id: int, status: str, by: str = "dashboard") -> None:
+        self._execute("UPDATE approvals SET status=?, decided_at=?, decided_by=? WHERE id=?",
+                      (status, _now(), by, approval_id))
+
+    def quarantine_injection(self, program_id: int, source: str, severity: str,
+                             patterns: list, snippet: str) -> int:
+        cur = self._execute(
+            "INSERT INTO injection_quarantine (program_id, source, severity, patterns, snippet, created_at) "
+            "VALUES (?,?,?,?,?,?)",
+            (program_id, source, severity, json.dumps(patterns or []), snippet[:500], _now()))
+        return int(cur.lastrowid)
+
+    def get_quarantine(self, program_id: int | None = None) -> list[sqlite3.Row]:
+        if program_id is None:
+            return self.query("SELECT * FROM injection_quarantine ORDER BY id DESC")
+        return self.query("SELECT * FROM injection_quarantine WHERE program_id=? ORDER BY id DESC",
+                          (program_id,))
 
     def close(self) -> None:
         with self._lock:

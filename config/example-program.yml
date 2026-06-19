@@ -67,3 +67,25 @@ notifications:
   discord_webhook: ""
   telegram_bot_token: ""
   telegram_chat_id: ""
+
+# --- RULES OF ENGAGEMENT: the hard authorization contract (Phase 1) ---------
+# The Action Gateway enforces this. (Scope/rate-limit/UA above are part of it.)
+roe:
+  ai_testing_allowed: false         # the future agent may only run if this is true
+  allowed_techniques: ["*"]         # or a subset: [xss, ssrf, accesscontrol]
+  no_go_assets:                     # never touched (deny-list wins over scope)
+    - { type: domain, value: "payments.example.com" }
+  time_windows: []                  # e.g. ["00:00-06:00"] (UTC); empty = 24/7
+  max_actions_per_target: 200       # bounded sequences -> checkpoint past this
+
+# --- USAGE GOVERNOR: the 85% budget cap for future agent/model usage --------
+usage:
+  daily_budget_tokens: 0            # 0 = unlimited; set a number to enforce
+  rolling_budget_tokens: 0
+  rolling_window_seconds: 3600
+  reserve_fraction: 0.15            # halt at 1 - reserve = 85%
+
+# --- DATA GOVERNANCE --------------------------------------------------------
+governance:
+  require_approval_for_state_changing: false   # tag POST/PUT/PATCH for approval
+  retention_days: 30                # `bbp retention <config> --days 30` to purge

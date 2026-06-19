@@ -28,12 +28,22 @@ from core.tooling import is_available
 
 
 class ReconTools:
-    def __init__(self, config: ProgramConfig, logger: logging.Logger | None = None) -> None:
+    def __init__(self, config: ProgramConfig, logger: logging.Logger | None = None,
+                 gateway=None) -> None:
         self.config = config
         self.scope = config.scope
         self.ua = config.http.user_agent
         self.rps = config.rate_limit.per_host_rps
         self.log = logger or logging.getLogger("recon.tools")
+        self.gateway = gateway  # route tool execution through the Action Gateway
+
+    def _target_of(self, cmd: list[str]) -> str:
+        """Pick a scope target from the command (for the gateway check)."""
+        for tok in cmd[1:]:
+            if "." in tok and self.scope.check(tok).allowed:
+                return tok
+        # fall back to the program's first in-scope entry
+        return self.config.scope.in_scope[0].value if self.config.scope.in_scope else cmd[0]
 
     # -- generic subprocess helper ----------------------------------------
     def _run(
@@ -44,6 +54,11 @@ class ReconTools:
     ) -> tuple[int, str, str]:
         """Run a command, capture output, never raise on non-zero exit."""
         self.log.debug("exec: %s", " ".join(cmd))
+        # Route through the gateway chokepoint when available (scope/rules/audit).
+        if self.gateway is not None:
+            r = self.gateway.run_tool(cmd[0], cmd[1:], self._target_of(cmd),
+                                      technique="recon", stdin=stdin, timeout=timeout)
+            return r.returncode, r.stdout, r.stderr
         try:
             proc = subprocess.run(
                 cmd,

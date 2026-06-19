@@ -176,6 +176,12 @@ def _register_later_stages() -> None:
         register_validation(app)
     except Exception:
         pass
+    try:
+        from core.gov_cli import register as register_gov
+
+        register_gov(app)
+    except Exception:
+        pass
 
 
 @app.callback()

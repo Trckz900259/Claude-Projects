@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -93,9 +94,9 @@ callbacks = df(conn, "SELECT * FROM callbacks WHERE program_id = ? ORDER BY rece
 runs = df(conn, "SELECT * FROM runs WHERE program_id = ? ORDER BY id DESC", (pid,))
 identities = df(conn, "SELECT * FROM identities WHERE program_id = ? ORDER BY id", (pid,))
 
-tab_over, tab_find, tab_recon, tab_ident, tab_cb, tab_charts, tab_valid = st.tabs(
+tab_over, tab_find, tab_recon, tab_ident, tab_cb, tab_charts, tab_valid, tab_safety = st.tabs(
     ["Overview", "Findings", "Recon & coverage", "Identities", "Blind callbacks",
-     "Charts", "Validation"]
+     "Charts", "Validation", "Safety & Governance"]
 )
 
 # ---------------------------------------------------------------------------
@@ -377,3 +378,186 @@ with tab_valid:
             st.success("No gaps in the latest run.")
         else:
             st.dataframe(gl, use_container_width=True, hide_index=True)
+
+
+# ---------------------------------------------------------------------------
+# Safety & Governance (supervisor flags, breakers, approvals, audit, usage)
+# ---------------------------------------------------------------------------
+with tab_safety:
+    st.subheader("Safety & governance state")
+    st.caption("Live supervisor controls and the tamper-evident record. "
+               "Actions here write back to the datastore.")
+
+    def _gov_get(key, default=None):
+        """Fetch a single gov_state value (None/default if absent)."""
+        g = df(conn, "SELECT value FROM gov_state WHERE key = ?", (key,))
+        return g.iloc[0]["value"] if not g.empty else default
+
+    def _gov_set(key, value):
+        """Upsert a gov_state flag with the current UTC timestamp."""
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            "INSERT INTO gov_state(key, value, updated_at) VALUES(?, ?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value, "
+            "updated_at = excluded.updated_at",
+            (key, value, now),
+        )
+        conn.commit()
+
+    kill = _gov_get("kill_switch", "0")
+    dry = _gov_get("dry_run", "0")
+    halted = _gov_get("halted", "0")
+    halted_reason = _gov_get("halted_reason")
+
+    # ----- prominent status banner -----
+    if kill == "1" or halted == "1":
+        bits = []
+        if kill == "1":
+            bits.append("KILL-SWITCH ENGAGED")
+        if halted == "1":
+            bits.append("HALTED" + (f" — {halted_reason}" if halted_reason else ""))
+        st.error("🔴 " + "  ·  ".join(bits) + " — automated actions are blocked.")
+    else:
+        st.success("🟢 Operational — no kill-switch, not halted.")
+
+    s1, s2, s3 = st.columns(3)
+    s1.metric("Kill-switch", "ON" if kill == "1" else "off")
+    s2.metric("Halted", "YES" if halted == "1" else "no")
+    s3.metric("Dry-run", "ON" if dry == "1" else "off")
+
+    # ----- supervisor controls -----
+    st.markdown("**Supervisor controls**")
+    cc1, cc2, cc3 = st.columns([1, 1, 2])
+    with cc1:
+        if st.button("🔴 Engage kill-switch", key="gov_kill_engage"):
+            _gov_set("kill_switch", "1")
+            _gov_set("halted", "1")
+            _gov_set("halted_reason", "kill-switch engaged from dashboard")
+            st.rerun()
+    with cc2:
+        if st.button("✅ Clear kill-switch / halt", key="gov_kill_clear"):
+            _gov_set("kill_switch", "0")
+            _gov_set("halted", "0")
+            _gov_set("halted_reason", "")
+            st.rerun()
+    with cc3:
+        new_dry = st.checkbox("Dry-run mode (simulate, don't act)",
+                              value=(dry == "1"), key="gov_dry_run")
+        if new_dry != (dry == "1"):
+            _gov_set("dry_run", "1" if new_dry else "0")
+            st.rerun()
+
+    # ----- usage governor meter -----
+    st.markdown("**Usage governor (budget headroom)**")
+    try:
+        from core.usage import UsageGovernor
+        snap = UsageGovernor(
+            daily_budget=0, rolling_budget=0,
+            state_path=str(Path(DB_PATH).parent / "usage.json"),
+        ).snapshot()
+        u1, u2 = st.columns(2)
+        with u1:
+            st.progress(min(1.0, max(0.0, float(snap["daily_pct"]))),
+                        text=f"Daily {snap['daily_pct'] * 100:.0f}%")
+        with u2:
+            st.progress(min(1.0, max(0.0, float(snap["rolling_pct"]))),
+                        text=f"Rolling {snap['rolling_pct'] * 100:.0f}%")
+        st.caption("Automated spend halts at 0.85 (85%) of either budget; "
+                   "the remaining 15% is reserved for interactive use. "
+                   "A budget of 0 means unlimited (shown as 0%).")
+    except Exception as exc:
+        st.info(f"Usage governor snapshot unavailable: {exc}")
+
+    # ----- circuit breakers -----
+    st.markdown("**Circuit breakers**")
+    breakers = df(conn,
+                  "SELECT target, kind, count, threshold, tripped, reason, updated_at "
+                  "FROM circuit_breakers ORDER BY tripped DESC, updated_at DESC")
+    if breakers.empty:
+        st.info("No circuit breakers recorded.")
+    else:
+        n_tripped = int((breakers["tripped"] == 1).sum())
+        if n_tripped:
+            st.error(f"🔴 {n_tripped} breaker(s) tripped.")
+        styled = breakers.style.apply(
+            lambda row: ["background-color: #c0392b; color: white"
+                         if row["tripped"] == 1 else "" for _ in row],
+            axis=1,
+        )
+        st.dataframe(styled, use_container_width=True, hide_index=True)
+
+    # ----- human-in-the-loop approvals -----
+    st.markdown("**Pending approvals (human-in-the-loop)**")
+    pending = df(conn,
+                 "SELECT id, program_id, actor, kind, target, summary, impact, created_at "
+                 "FROM approvals WHERE status = 'pending' ORDER BY created_at",
+                 ())
+    if pending.empty:
+        st.success("No pending approvals.")
+    else:
+        st.caption(f"{len(pending)} request(s) awaiting a decision.")
+        for _, ap in pending.iterrows():
+            aid = int(ap["id"])
+            with st.container():
+                st.markdown(
+                    f"**#{aid}** · `{ap['kind']}` · target `{ap['target']}` "
+                    f"· actor `{ap['actor']}`"
+                )
+                if ap["summary"]:
+                    st.write(ap["summary"])
+                if ap["impact"]:
+                    st.caption(f"Impact: {ap['impact']}")
+                a1, a2, _ = st.columns([1, 1, 4])
+                if a1.button("✅ Approve", key=f"approve_{aid}"):
+                    conn.execute(
+                        "UPDATE approvals SET status = ?, decided_at = ?, "
+                        "decided_by = 'dashboard' WHERE id = ?",
+                        ("approved", datetime.now(timezone.utc).isoformat(), aid),
+                    )
+                    conn.commit()
+                    st.rerun()
+                if a2.button("⛔ Deny", key=f"deny_{aid}"):
+                    conn.execute(
+                        "UPDATE approvals SET status = ?, decided_at = ?, "
+                        "decided_by = 'dashboard' WHERE id = ?",
+                        ("denied", datetime.now(timezone.utc).isoformat(), aid),
+                    )
+                    conn.commit()
+                    st.rerun()
+                st.divider()
+
+    # ----- injection quarantine -----
+    st.markdown("**Injection quarantine (flagged adversarial content)**")
+    quar = df(conn,
+              "SELECT created_at, source, severity, patterns, snippet "
+              "FROM injection_quarantine ORDER BY id DESC LIMIT 100")
+    if quar.empty:
+        st.success("Nothing quarantined.")
+    else:
+        st.caption(f"{len(quar)} quarantined item(s) (most recent first).")
+        st.dataframe(quar, use_container_width=True, hide_index=True)
+
+    # ----- tamper-evident audit trail (separate DB) -----
+    st.markdown("**Audit trail (tamper-evident, separate store)**")
+    audit_path = Path(DB_PATH).parent / "audit.db"
+    if not audit_path.exists():
+        st.info(f"No audit store at `{audit_path}` yet.")
+    else:
+        try:
+            aconn = sqlite3.connect(str(audit_path))
+            aconn.row_factory = sqlite3.Row
+            total = df(aconn, "SELECT COUNT(*) AS c FROM audit")
+            n_total = int(total.iloc[0]["c"]) if not total.empty else 0
+            recent = df(aconn,
+                        "SELECT seq, ts, actor, target, kind, decision, reason, impact "
+                        "FROM audit ORDER BY seq DESC LIMIT 50")
+            aconn.close()
+            st.caption(f"{n_total} total entries · showing the most recent "
+                       f"{len(recent)}. Verify the HMAC chain with "
+                       "`bbp audit-verify`.")
+            if recent.empty:
+                st.info("Audit store exists but has no entries yet.")
+            else:
+                st.dataframe(recent, use_container_width=True, hide_index=True)
+        except Exception as exc:
+            st.info(f"Could not read audit store: {exc}")

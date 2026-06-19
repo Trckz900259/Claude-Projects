@@ -65,7 +65,7 @@ class ReconPipeline:
     def __init__(self, ctx: PlatformContext, logger: logging.Logger | None = None) -> None:
         self.ctx = ctx
         self.log = logger or logging.getLogger("recon.pipeline")
-        self.tools = ReconTools(ctx.config, logger=self.log)
+        self.tools = ReconTools(ctx.config, logger=self.log, gateway=getattr(ctx, "gateway", None))
         self.ds = ctx.datastore
         self.pid = ctx.program_id
 
