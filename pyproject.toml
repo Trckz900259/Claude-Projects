@@ -1,0 +1,5 @@
+[tool.pytest.ini_options]
+# Put the repo root on sys.path so `import goldbot` works when running pytest
+# from anywhere in the project.
+pythonpath = ["."]
+testpaths = ["tests"]
