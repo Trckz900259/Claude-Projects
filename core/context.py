@@ -57,7 +57,18 @@ class PlatformContext:
         )
         http_engine = HttpEngine(scope=cfg.scope, rate_limiter=rate_limiter,
                                  http_config=cfg.http, logger=get_logger("http"))
-        datastore = Datastore(db_path=db_path)
+
+        # --- data-at-rest cipher (built BEFORE the datastore so the high-
+        #     sensitivity fields are encrypted on write and decrypted on read).
+        #     The key lives in the SecretsStore (env BBP_SECRET_DATA_KEY or the
+        #     gitignored config/secrets.local.yml), falling back to a 0600
+        #     gitignored key file — never committed. ---
+        from core.governance import Redactor, SecretsStore, get_data_cipher
+
+        secrets = SecretsStore()
+        cipher = get_data_cipher(secrets, key_path=str(data_dir / ".data_key"))
+
+        datastore = Datastore(db_path=db_path, cipher=cipher)
         program_id = datastore.upsert_program(
             name=cfg.name, platform=cfg.platform, handle=cfg.handle,
             config_path=str(config_path))
@@ -66,17 +77,16 @@ class PlatformContext:
         from core.approval import ApprovalQueue
         from core.audit import AuditTrail
         from core.gateway import ActionGateway, GatewayHttp, Permissions
-        from core.governance import Redactor, SecretsStore, get_data_cipher
         from core.injection import InjectionDetector
         from core.roe import load_roe
         from core.supervisor import SafetySupervisor
         from core.usage import UsageGovernor
 
-        secrets = SecretsStore()
-        # Ensures an at-rest key exists; we derive a separate HMAC key for the audit.
-        get_data_cipher(secrets, key_path=str(data_dir / ".data_key"))
-        data_key = (data_dir / ".data_key").read_text().strip() if (data_dir / ".data_key").exists() \
-            else "dev-key"
+        # The audit's HMAC key is derived from the SAME data key the cipher uses,
+        # so the at-rest key (secret or 0600 file) is the single root of trust.
+        data_key = secrets.get("DATA_KEY") or (
+            (data_dir / ".data_key").read_text().strip()
+            if (data_dir / ".data_key").exists() else "dev-key")
         audit_key = hashlib.sha256(("audit:" + data_key).encode()).digest()
 
         redactor = Redactor()
@@ -106,8 +116,24 @@ class PlatformContext:
             logger=get_logger("gateway"))
 
         http = GatewayHttp(gateway)
-        log.info("Context ready for program %r (id=%d) — gateway + governance active",
-                 cfg.name, program_id)
+
+        # --- structural egress guard: ARM the no-bypass invariant ---
+        # From here on, the ONLY in-process code that may open a target socket is
+        # a sanctioned executor holding an egress permit (HttpEngine / RaceEngine /
+        # notify). Any other attempt to reach the network raises GatewayBypassError
+        # before a byte leaves the process. The operator's own OOB/notify hosts are
+        # registered as control-plane so they are never mistaken for a target.
+        from core import egress
+
+        egress.install()
+        egress.allow_control_plane(
+            getattr(cfg.callback, "interactsh_server", "") or "",
+            getattr(cfg.callback, "interactsh_domain", "") or "",
+        )
+        egress.arm()
+
+        log.info("Context ready for program %r (id=%d) — gateway + governance + "
+                 "egress guard active", cfg.name, program_id)
         return cls(
             config=cfg, datastore=datastore, http=http, rate_limiter=rate_limiter,
             program_id=program_id, gateway=gateway, supervisor=supervisor, audit=audit,

@@ -223,7 +223,8 @@ class XssModule(Module):
         return None
 
     def _try_dalfox(self, url: str, param: str) -> Finding | None:
-        results = run_dalfox(self.ctx.config, url, param=param, logger=self.log)
+        results = run_dalfox(self.ctx.config, url, param=param, logger=self.log,
+                             gateway=getattr(self.ctx, "gateway", None))
         for r in results:
             marker = new_marker()
             # Prefer dalfox's PoC URL; verify it ourselves for a screenshot.

@@ -30,6 +30,7 @@ import time
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
+from core.egress import permit
 from core.exceptions import OutOfScopeError
 from core.scope import ScopeEnforcer, host_of
 
@@ -70,12 +71,18 @@ class RaceEngine:
         verify_tls: bool = True,
         logger: logging.Logger | None = None,
         timeout: float = 12.0,
+        gateway=None,
+        technique: str = "accesscontrol",
     ) -> None:
         self.scope = scope
         self.user_agent = user_agent
         self.verify_tls = verify_tls
         self.log = logger or logging.getLogger("race")
         self.timeout = timeout
+        # When wired with the Action Gateway, every burst is gateway-authorized
+        # (supervisor / RoE / scope / usage) before any socket is opened.
+        self.gateway = gateway
+        self.technique = technique
 
     # -- public: pick the best mode, fall back gracefully -----------------
     def race(
@@ -85,14 +92,29 @@ class RaceEngine:
         decision = self.scope.check(url)
         if not decision.allowed:
             raise OutOfScopeError(url, decision.reason)
+        # GATEWAY GATE: a race is a self-executing tool (it bursts raw sockets and
+        # cannot use the rate-limited HTTP path), so it authorizes through the
+        # gateway here — raising if the supervisor/RoE/usage refuse it — and then
+        # executes its burst inside an egress permit. This keeps the invariant
+        # intact: no target-facing action reaches the network except via the
+        # gateway. (Standalone, with no gateway, the local scope-check above and
+        # the caller's own rules gate still apply.)
+        if self.gateway is not None:
+            self.gateway.authorize_action(
+                url, technique=self.technique, kind="race",
+                impact="state_changing", active=True,
+                params={"tool": "race", "url": url, "method": method, "count": count})
         count = max(2, min(count, 50))  # bounded burst
 
-        if urlparse(url).scheme == "https":
-            try:
-                return self._http2_single_packet(url, method, headers or {}, body, count)
-            except Exception as exc:
-                self.log.info("HTTP/2 single-packet unavailable (%s); using HTTP/1 last-byte", exc)
-        return self._http1_last_byte(url, method, headers or {}, body, count)
+        # SANCTIONED EGRESS: the whole synchronous burst runs on this thread, so a
+        # single permit covers every socket the two strategies open.
+        with permit():
+            if urlparse(url).scheme == "https":
+                try:
+                    return self._http2_single_packet(url, method, headers or {}, body, count)
+                except Exception as exc:
+                    self.log.info("HTTP/2 single-packet unavailable (%s); using HTTP/1 last-byte", exc)
+            return self._http1_last_byte(url, method, headers or {}, body, count)
 
     # -- HTTP/2 single-packet ---------------------------------------------
     def _http2_single_packet(

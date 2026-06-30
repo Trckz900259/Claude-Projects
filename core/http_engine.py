@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 import requests
 
 from core.config import HttpConfig
+from core.egress import permit
 from core.exceptions import OutOfScopeError
 from core.logging_setup import log_action
 from core.ratelimit import RateLimiter
@@ -138,17 +139,22 @@ class HttpEngine:
             self._counter += 1
             start = time.monotonic()
             try:
-                resp = self._session.request(
-                    method=method,
-                    url=url,
-                    headers=send_headers,
-                    params=params,
-                    data=data,
-                    json=json,
-                    timeout=timeout or self.config.timeout_seconds,
-                    allow_redirects=self.config.follow_redirects,
-                    verify=self.config.verify_tls,
-                )
+                # SANCTIONED EGRESS: this is the gateway's HTTP execution arm, so
+                # we hold an egress permit while the socket is opened. Any OTHER
+                # in-process attempt to reach the network (without this permit)
+                # is hard-refused by the egress guard (core/egress.py).
+                with permit():
+                    resp = self._session.request(
+                        method=method,
+                        url=url,
+                        headers=send_headers,
+                        params=params,
+                        data=data,
+                        json=json,
+                        timeout=timeout or self.config.timeout_seconds,
+                        allow_redirects=self.config.follow_redirects,
+                        verify=self.config.verify_tls,
+                    )
             except requests.RequestException as exc:
                 elapsed = (time.monotonic() - start) * 1000
                 log_action(

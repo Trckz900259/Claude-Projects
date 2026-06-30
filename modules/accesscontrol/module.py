@@ -310,7 +310,8 @@ class AccessControlModule(Module):
         send = {k: v for k, v in headers.items()
                 if k.lower() in ("authorization", "content-type", "cookie")}
         eng = RaceEngine(self.ctx.config.scope, self.ctx.config.http.user_agent,
-                         verify_tls=self.ctx.config.http.verify_tls, logger=self.log)
+                         verify_tls=self.ctx.config.http.verify_tls, logger=self.log,
+                         gateway=getattr(self.ctx, "gateway", None), technique="accesscontrol")
         res = eng.race(d["url"], method=d["method"], headers=send, body=d.get("body", ""), count=20)
         if res.successes <= 1:
             return []  # properly serialised — no race

@@ -57,6 +57,46 @@ def df(conn, sql, params=()) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# At-rest decryption: the high-sensitivity fields (finding request/response,
+# identity auth material) are stored encrypted. We load the SAME FieldCipher the
+# platform used — keyed from the SecretsStore (BBP_SECRET_DATA_KEY) or the
+# gitignored data/.data_key file, never committed — and decrypt those columns
+# transparently for display. If no key is available we leave the values as-is.
+# ---------------------------------------------------------------------------
+def _load_cipher():
+    try:
+        from core.governance import SecretsStore, get_data_cipher
+
+        key_path = Path(DB_PATH).parent / ".data_key"
+        secrets = SecretsStore()
+        if not secrets.get("DATA_KEY") and not key_path.exists():
+            return None  # nothing to decrypt with; don't mint a spurious key
+        return get_data_cipher(secrets, key_path=str(key_path))
+    except Exception:
+        return None
+
+
+CIPHER = _load_cipher()
+
+
+def _dec(value):
+    """Decrypt one stored value (forgiving: non-tokens pass through unchanged)."""
+    if CIPHER is None or not isinstance(value, str) or not value:
+        return value
+    try:
+        return CIPHER.decrypt(value)
+    except Exception:
+        return value
+
+
+def _decrypt_columns(frame: pd.DataFrame, columns) -> pd.DataFrame:
+    for col in columns:
+        if col in frame.columns:
+            frame[col] = frame[col].map(_dec)
+    return frame
+
+
+# ---------------------------------------------------------------------------
 # Header / program selection
 # ---------------------------------------------------------------------------
 st.title("🛡️ Bug Bounty Platform — Dashboard")
@@ -93,6 +133,10 @@ assets = df(conn, "SELECT * FROM assets WHERE program_id = ?", (pid,))
 callbacks = df(conn, "SELECT * FROM callbacks WHERE program_id = ? ORDER BY received_at DESC", (pid,))
 runs = df(conn, "SELECT * FROM runs WHERE program_id = ? ORDER BY id DESC", (pid,))
 identities = df(conn, "SELECT * FROM identities WHERE program_id = ? ORDER BY id", (pid,))
+
+# Transparently decrypt the high-sensitivity at-rest fields for display.
+findings = _decrypt_columns(findings, ("request", "response"))
+identities = _decrypt_columns(identities, ("auth_summary",))
 
 tab_over, tab_find, tab_recon, tab_ident, tab_cb, tab_charts, tab_valid, tab_safety = st.tabs(
     ["Overview", "Findings", "Recon & coverage", "Identities", "Blind callbacks",

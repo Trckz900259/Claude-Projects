@@ -40,6 +40,7 @@ def run_dalfox(
     param: str | None = None,
     timeout: int = 150,
     logger: logging.Logger | None = None,
+    gateway=None,
 ) -> list[DalfoxResult]:
     log = logger or logging.getLogger("xss.dalfox")
     if not is_available("dalfox"):
@@ -68,14 +69,23 @@ def run_dalfox(
         if param:
             cmd += ["-p", param]
 
-        try:
-            subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        except subprocess.TimeoutExpired:
-            log.warning("dalfox timed out on %s", url)
-            return []
-        except Exception as exc:  # pragma: no cover - defensive
-            log.warning("dalfox failed on %s: %s", url, exc)
-            return []
+        # CHOKEPOINT: dalfox makes its own target-facing requests, so — exactly
+        # like the recon tools — route it through the Action Gateway when wired
+        # (scope / RoE / supervisor / usage / audit all apply, and the run is
+        # recorded). It still writes its JSON to out_path, which we read below.
+        if gateway is not None:
+            r = gateway.run_tool(cmd[0], cmd[1:], url, technique="xss", timeout=timeout)
+            if not r.executed and r.error:
+                log.warning("dalfox did not run on %s: %s", url, r.error)
+        else:
+            try:
+                subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+            except subprocess.TimeoutExpired:
+                log.warning("dalfox timed out on %s", url)
+                return []
+            except Exception as exc:  # pragma: no cover - defensive
+                log.warning("dalfox failed on %s: %s", url, exc)
+                return []
 
         raw = out_path.read_text(encoding="utf-8") if out_path.exists() else ""
 

@@ -233,6 +233,33 @@ class ActionGateway:
 
         return "allow", "authorized"
 
+    # -- authorize-only path (for self-executing tools) -------------------
+    def authorize_action(self, target: str, *, actor: str = "module",
+                         objective: str = "scan", technique: str = "",
+                         kind: str = "action", impact: str = "read_only",
+                         active: bool = True, requires_approval: bool = False,
+                         approval_id=None, params: dict | None = None) -> GatewayResult:
+        """
+        Run the FULL authorization pipeline (supervisor / RoE / scope / usage /
+        approval) WITHOUT executing anything, and return the decision.
+
+        For sanctioned executors that must do their own I/O — e.g. the race
+        engine, which deliberately bursts raw sockets and so cannot use the
+        rate-limited HTTP path — but must still be gated by the gateway. The
+        caller executes its egress (inside an egress permit) only if the decision
+        is ``allow``. Raises GatewayDenied / OutOfScopeError / ApprovalRequired
+        exactly like the executing paths do.
+        """
+        decision, reason = self._authorize(
+            actor=actor, objective=objective, target=target, kind=kind,
+            technique=technique, tool="", impact=impact,
+            requires_approval=requires_approval,
+            params=params or {"target": target, "technique": technique},
+            active=active, approval_id=approval_id)
+        self._audit(actor, target, kind, params or {"target": target},
+                    decision if decision == "dry_run" else "allow", reason, impact)
+        return GatewayResult(decision=decision, reason=reason, impact=impact)
+
     # -- HTTP path --------------------------------------------------------
     def http_request(self, method: str, url: str, *, headers=None, params=None,
                      data=None, json=None, timeout=None, actor: str = "module",

@@ -358,9 +358,16 @@ class Finding:
 class Datastore:
     """A thin, thread-safe wrapper around one SQLite database file."""
 
-    def __init__(self, db_path: str | Path = "data/findings.db") -> None:
+    def __init__(self, db_path: str | Path = "data/findings.db", cipher=None) -> None:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        # Optional FieldCipher (Fernet). When set, the high-sensitivity fields —
+        # captured request/response headers+bodies, finding request/response
+        # blocks (which carry harvested tokens/heapdump secrets), and identity
+        # auth material — are encrypted AT REST and transparently decrypted on
+        # read. Lower-sensitivity metadata (urls, severities, titles, …) stays in
+        # plaintext so the dashboard/reporter can filter and group on it.
+        self.cipher = cipher
         # check_same_thread=False + our own lock = safe sharing across workers.
         self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
@@ -368,6 +375,35 @@ class Datastore:
         self._conn.execute("PRAGMA journal_mode=WAL;")
         self._conn.execute("PRAGMA foreign_keys=ON;")
         self._init_schema()
+
+    # -- field-level encryption helpers -----------------------------------
+    def _enc(self, value: str | None) -> str:
+        """Encrypt a sensitive field for storage (no-op without a cipher)."""
+        if not value or self.cipher is None:
+            return value or ""
+        return self.cipher.encrypt(value)
+
+    def _dec(self, value: str | None) -> str:
+        """
+        Decrypt a sensitive field on read (no-op without a cipher).
+
+        FieldCipher.decrypt is forgiving: a value that isn't a Fernet token (e.g.
+        legacy plaintext written before encryption was enabled) is returned
+        unchanged, so reads never crash on a mixed table.
+        """
+        if value is None or self.cipher is None:
+            return value or ""
+        return self.cipher.decrypt(value)
+
+    def _decrypt_row(self, row: sqlite3.Row | None, fields: tuple[str, ...]) -> dict | None:
+        """Turn a Row into a dict with the named sensitive fields decrypted."""
+        if row is None:
+            return None
+        d = dict(row)
+        for f in fields:
+            if f in d:
+                d[f] = self._dec(d[f])
+        return d
 
     def _init_schema(self) -> None:
         with self._lock:
@@ -473,6 +509,10 @@ class Datastore:
         key = finding.dedup_key()
         evidence_json = json.dumps(finding.evidence or {}, default=str)
         now = _now()
+        # The raw request/response can carry harvested secrets (e.g. a heapdump
+        # body leaked via SSRF), so they are encrypted at rest.
+        enc_request = self._enc(finding.request)
+        enc_response = self._enc(finding.response)
 
         with self._lock:
             existing = self._conn.execute(
@@ -500,7 +540,7 @@ class Datastore:
                     (
                         program_id, finding.type, finding.subtype, finding.severity,
                         finding.status, finding.url, finding.parameter, finding.payload,
-                        finding.context, finding.request, finding.response,
+                        finding.context, enc_request, enc_response,
                         finding.cvss_score, finding.cvss_vector, finding.title,
                         finding.description, evidence_json, finding.poc_screenshot,
                         finding.poc_video, key, 1, now, now,
@@ -508,13 +548,13 @@ class Datastore:
                 )
                 finding_id = int(cur.lastrowid)
 
-            # Always record the individual instance.
+            # Always record the individual instance (same encrypted blobs).
             self._conn.execute(
                 "INSERT INTO finding_instances "
                 "(finding_id, url, parameter, payload, request, response, created_at) "
                 "VALUES (?,?,?,?,?,?,?)",
                 (finding_id, finding.url, finding.parameter, finding.payload,
-                 finding.request, finding.response, now),
+                 enc_request, enc_response, now),
             )
             self._conn.commit()
         return finding_id
@@ -533,18 +573,21 @@ class Datastore:
         values = list(fields.values()) + [_now(), finding_id]
         self._execute(f"UPDATE findings SET {cols}, updated_at = ? WHERE id = ?", values)
 
-    def get_findings(self, program_id: int, status: str | None = None) -> list[sqlite3.Row]:
+    def get_findings(self, program_id: int, status: str | None = None) -> list[dict]:
         if status:
-            return self.query(
+            rows = self.query(
                 "SELECT * FROM findings WHERE program_id = ? AND status = ? ORDER BY id",
                 (program_id, status),
             )
-        return self.query(
-            "SELECT * FROM findings WHERE program_id = ? ORDER BY id", (program_id,)
-        )
+        else:
+            rows = self.query(
+                "SELECT * FROM findings WHERE program_id = ? ORDER BY id", (program_id,)
+            )
+        return [self._decrypt_row(r, ("request", "response")) for r in rows]
 
-    def get_finding(self, finding_id: int) -> sqlite3.Row | None:
-        return self.query_one("SELECT * FROM findings WHERE id = ?", (finding_id,))
+    def get_finding(self, finding_id: int) -> dict | None:
+        row = self.query_one("SELECT * FROM findings WHERE id = ?", (finding_id,))
+        return self._decrypt_row(row, ("request", "response"))
 
     # -- blind callbacks ---------------------------------------------------
     def record_callback(
@@ -636,24 +679,28 @@ class Datastore:
         self, program_id: int, name: str, role: str = "",
         auth_type: str = "", auth_summary: str = "", description: str = "",
     ) -> int:
+        # auth_summary describes the identity's auth material (cookie / bearer /
+        # session) — high-sensitivity, so it is encrypted at rest.
+        enc_summary = self._enc(auth_summary)
         existing = self.query_one(
             "SELECT id FROM identities WHERE program_id = ? AND name = ?", (program_id, name)
         )
         if existing:
             self._execute(
                 "UPDATE identities SET role=?, auth_type=?, auth_summary=?, description=? WHERE id=?",
-                (role, auth_type, auth_summary, description, int(existing["id"])),
+                (role, auth_type, enc_summary, description, int(existing["id"])),
             )
             return int(existing["id"])
         cur = self._execute(
             "INSERT INTO identities (program_id, name, role, auth_type, auth_summary, description, created_at) "
             "VALUES (?,?,?,?,?,?,?)",
-            (program_id, name, role, auth_type, auth_summary, description, _now()),
+            (program_id, name, role, auth_type, enc_summary, description, _now()),
         )
         return int(cur.lastrowid)
 
-    def get_identities(self, program_id: int) -> list[sqlite3.Row]:
-        return self.query("SELECT * FROM identities WHERE program_id = ? ORDER BY id", (program_id,))
+    def get_identities(self, program_id: int) -> list[dict]:
+        rows = self.query("SELECT * FROM identities WHERE program_id = ? ORDER BY id", (program_id,))
+        return [self._decrypt_row(r, ("auth_summary",)) for r in rows]
 
     # -- access-control module: captured traffic --------------------------
     def add_captured(
@@ -662,20 +709,29 @@ class Datastore:
         status_code: int | None = None, resp_headers: dict | None = None,
         resp_body: str = "", captured_as: str = "", source: str = "mitmproxy",
     ) -> int:
+        # Captured headers carry auth material (Cookie / Authorization) and the
+        # bodies carry request/response payloads — all high-sensitivity, so the
+        # four fields are encrypted at rest. method/url/host/status stay plaintext
+        # so the replay engine can filter on them without decrypting everything.
         cur = self._execute(
             "INSERT INTO captured_traffic "
             "(program_id, method, url, host, req_headers, req_body, status_code, "
             " resp_headers, resp_body, captured_as, source, created_at) "
             "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            (program_id, method, url, host, json.dumps(req_headers or {}), req_body,
-             status_code, json.dumps(resp_headers or {}), resp_body, captured_as, source, _now()),
+            (program_id, method, url, host,
+             self._enc(json.dumps(req_headers or {})), self._enc(req_body),
+             status_code,
+             self._enc(json.dumps(resp_headers or {})), self._enc(resp_body),
+             captured_as, source, _now()),
         )
         return int(cur.lastrowid)
 
-    def get_captured(self, program_id: int) -> list[sqlite3.Row]:
-        return self.query(
+    def get_captured(self, program_id: int) -> list[dict]:
+        rows = self.query(
             "SELECT * FROM captured_traffic WHERE program_id = ? ORDER BY id", (program_id,)
         )
+        return [self._decrypt_row(r, ("req_headers", "req_body", "resp_headers", "resp_body"))
+                for r in rows]
 
     # -- access-control module: endpoints + id params --------------------
     def add_endpoint(

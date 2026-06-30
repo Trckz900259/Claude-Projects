@@ -13,28 +13,34 @@ import logging
 import requests
 
 from core.config import NotificationsConfig
+from core.egress import permit
 
 log = logging.getLogger("notify")
 
 
 def send_notification(cfg: NotificationsConfig, title: str, message: str) -> None:
     """Send to whichever channels are configured. Never raises."""
+    # These go to the OPERATOR's own Discord/Telegram (control-plane), not the
+    # target — but they are still real network egress, so they run inside an
+    # egress permit (the only sanctioned way to open a socket in-process).
     if cfg.discord_webhook:
         try:
-            requests.post(
-                cfg.discord_webhook,
-                json={"content": f"**{title}**\n{message}"},
-                timeout=10,
-            )
+            with permit():
+                requests.post(
+                    cfg.discord_webhook,
+                    json={"content": f"**{title}**\n{message}"},
+                    timeout=10,
+                )
         except Exception as exc:  # pragma: no cover - best effort
             log.debug("discord notify failed: %s", exc)
 
     if cfg.telegram_bot_token and cfg.telegram_chat_id:
         try:
-            requests.post(
-                f"https://api.telegram.org/bot{cfg.telegram_bot_token}/sendMessage",
-                json={"chat_id": cfg.telegram_chat_id, "text": f"{title}\n{message}"},
-                timeout=10,
-            )
+            with permit():
+                requests.post(
+                    f"https://api.telegram.org/bot{cfg.telegram_bot_token}/sendMessage",
+                    json={"chat_id": cfg.telegram_chat_id, "text": f"{title}\n{message}"},
+                    timeout=10,
+                )
         except Exception as exc:  # pragma: no cover - best effort
             log.debug("telegram notify failed: %s", exc)
